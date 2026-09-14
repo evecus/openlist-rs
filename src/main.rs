@@ -9,7 +9,7 @@ mod state;
 use clap::Parser;
 use state::AppState;
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
 
