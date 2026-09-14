@@ -84,6 +84,12 @@
     <template v-else-if="name === 'chevron-down'">
       <polyline points="6 9 12 15 18 9" />
     </template>
+    <template v-else-if="name === 'edit'">
+      <path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="M15 5l4 4" />
+    </template>
+    <template v-else-if="name === 'x'">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </template>
   </svg>
 </template>
 
