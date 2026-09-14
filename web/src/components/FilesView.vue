@@ -7,23 +7,14 @@
 
     <template v-else>
       <div class="toolbar">
-        <div v-if="currentId" class="storage-select">
-          <select class="input" :value="currentId" @change="$emit('switch-account', $event.target.value)">
-            <option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }}</option>
-          </select>
-        </div>
-
         <nav class="crumbs">
-          <a href="#" class="crumb-home" title="网盘列表" @click.prevent="$emit('go-home')">
-            <Icon name="home" :size="15" />
+          <a href="#" class="crumb-home" title="返回网盘列表" @click.prevent="$emit('go-home')">
+            <Icon name="home" :size="16" />
+            <span>首页</span>
           </a>
-          <template v-if="!currentId">
-            <Icon name="chevron-right" :size="14" class="crumb-sep" />
-            <span class="crumb-current">网盘</span>
-          </template>
-          <template v-else>
+          <template v-if="currentId">
             <template v-for="(c, i) in crumbs" :key="c.fid + i">
-              <Icon name="chevron-right" :size="14" class="crumb-sep" />
+              <span class="crumb-sep">/</span>
               <a
                 v-if="i !== crumbs.length - 1"
                 href="#"
@@ -35,20 +26,6 @@
             </template>
           </template>
         </nav>
-
-        <div class="toolbar-actions">
-          <button class="btn-icon btn-ghost" title="刷新" @click="$emit('refresh')">
-            <Icon name="refresh" :size="17" />
-          </button>
-          <div class="view-toggle">
-            <button :class="{ active: viewMode === 'list' }" @click="$emit('update:view-mode', 'list')" title="列表视图">
-              <Icon name="list" :size="16" />
-            </button>
-            <button :class="{ active: viewMode === 'grid' }" @click="$emit('update:view-mode', 'grid')" title="宫格视图">
-              <Icon name="grid" :size="16" />
-            </button>
-          </div>
-        </div>
       </div>
 
       <div v-if="err" class="alert alert-error">{{ err }}</div>
@@ -254,13 +231,17 @@ function fmtDate(ms) {
 .crumb-home {
   display: flex;
   align-items: center;
+  gap: 5px;
   color: var(--ol-text-dim);
+  font-size: 13.5px;
 }
 .crumb-home:hover {
   color: var(--ol-primary);
 }
 .crumb-sep {
   color: var(--ol-text-faint);
+  font-size: 13.5px;
+  padding: 0 3px;
 }
 .crumb-link {
   color: var(--ol-text-dim);
