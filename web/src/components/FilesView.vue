@@ -24,11 +24,40 @@
               >
               <span v-else class="crumb-current">{{ c.name }}</span>
             </template>
+            <template v-if="playing">
+              <span class="crumb-sep">/</span>
+              <span class="crumb-current">{{ playing.name }}</span>
+            </template>
           </template>
         </nav>
       </div>
 
       <div v-if="err" class="alert alert-error">{{ err }}</div>
+
+      <!-- 视频播放（与列表同页，仿 OpenList 视频预览） -->
+      <div v-if="playing" class="card player-card">
+        <video :src="playing._url" controls autoplay class="player-video"></video>
+        <div class="player-bar">
+          <span class="player-fname" :title="playing.name">{{ playing.name }}</span>
+        </div>
+        <div class="player-exts">
+          <button
+            v-for="p in PLAYERS"
+            :key="p.name"
+            class="ext-btn"
+            :style="{ background: p.color }"
+            :title="'用 ' + p.name + ' 播放'"
+            @click="openExternal(p)"
+          >
+            <Icon name="play" :size="14" />
+          </button>
+          <button class="ext-btn ext-open" title="打开原始链接" @click="openRaw">
+            <Icon name="arrow-right" :size="17" />
+          </button>
+        </div>
+      </div>
+
+      <template v-else>
 
       <!-- 加载中（进入网盘后） -->
       <div v-if="currentId && loading" class="state-box card">
@@ -119,6 +148,7 @@
           </div>
         </div>
       </div>
+      </template>
     </template>
   </div>
 </template>
@@ -133,6 +163,7 @@ const props = defineProps({
   currentId: { type: String, required: true },
   crumbs: { type: Array, required: true },
   entries: { type: Array, required: true },
+  playing: { type: Object, default: null },
   loading: { type: Boolean, default: false },
   err: { type: String, default: '' },
   viewMode: { type: String, default: 'list' },
@@ -162,6 +193,32 @@ const displayEntries = computed(() => {
 
 const VIDEO_EXT = ['mp4', 'mkv', 'webm', 'mov', 'm4v', 'avi', 'flv', 'ts', 'wmv', 'rmvb', '3gp']
 const isVideo = (e) => !e.is_dir && VIDEO_EXT.includes(e.name.split('.').pop()?.toLowerCase())
+
+// 外部播放器 URL Scheme（仿 OpenList 视频页的一排播放器图标）
+const PLAYERS = [
+  { name: 'PotPlayer', color: '#f5c518', url: (u) => `potplayer://${u}` },
+  { name: 'VLC', color: '#f5792a', url: (u) => `vlc://${u}` },
+  { name: 'MX Player', color: '#2f9cf4', url: (u) => `intent:${encodeURIComponent(u)}#Intent;package=com.mxtech.videoplayer.ad;end` },
+  { name: 'IINA', color: '#7c6cf0', url: (u) => `iina://weblink?url=${encodeURIComponent(u)}` },
+  { name: 'nPlayer', color: '#6e3fa3', url: (u) => `nplayer-${u}` },
+  { name: 'Infuse', color: '#ff7043', url: (u) => `infuse://x-callback-url/play?url=${encodeURIComponent(u)}` }
+]
+
+function absolutePlayUrl() {
+  try {
+    return new URL(props.playing._url, window.location.href).href
+  } catch {
+    return props.playing._url
+  }
+}
+
+function openExternal(p) {
+  window.location.href = p.url(absolutePlayUrl())
+}
+
+function openRaw() {
+  window.open(absolutePlayUrl(), '_blank')
+}
 
 function rowActivate(e) {
   if (e.is_dir) emit('open-dir', e)
@@ -390,6 +447,62 @@ a.fname:hover {
 }
 .drive-go {
   color: var(--ol-text-faint);
+}
+
+/* 视频播放（同页预览） */
+.player-card {
+  padding: 0;
+  overflow: hidden;
+}
+.player-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  outline: none;
+}
+.player-bar {
+  padding: 10px 12px;
+  border-top: 1px solid var(--ol-border);
+}
+.player-fname {
+  display: block;
+  max-width: 100%;
+  padding: 8px 12px;
+  background: var(--ol-bg);
+  border: 1px solid var(--ol-border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--ol-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-exts {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 10px 12px 14px;
+}
+.ext-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.ext-btn:hover {
+  transform: scale(1.12);
+  box-shadow: var(--ol-shadow);
+}
+.ext-open {
+  background: var(--ol-primary);
 }
 
 /* 宫格视图 */

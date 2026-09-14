@@ -8,9 +8,7 @@
     @login="doLogin"
   />
 
-  <VideoPlayer v-if="playing" :file="playing" :src="playing._url" @close="closePlayer" />
-
-  <div v-else class="app-shell">
+<div class="app-shell">
     <header class="app-header">
       <div class="header-inner">
         <div class="brand" @click="goHome">
@@ -65,6 +63,7 @@
       :current-id="currentId"
       :crumbs="crumbs"
       :entries="entries"
+      :playing="playing"
       :loading="loading"
       :err="err"
       :driver-labels="DRIVER_LABELS"
@@ -86,7 +85,6 @@
 import { ref, onMounted } from 'vue'
 import Icon from './components/Icon.vue'
 import LoginView from './components/LoginView.vue'
-import VideoPlayer from './components/VideoPlayer.vue'
 import AccountsView from './components/AccountsView.vue'
 import FilesView from './components/FilesView.vue'
 
@@ -302,6 +300,7 @@ function openDir(e) {
 }
 
 function goto(i) {
+  playing.value = null
   crumbs.value = crumbs.value.slice(0, i + 1)
   listFiles(crumbs.value[i].fid)
 }
