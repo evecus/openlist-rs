@@ -1,0 +1,122 @@
+# OpenList-rs
+
+用 Rust 重写的 OpenList 最小可用版：**只做登录 + 文件浏览 + 下载**，支持夸克网盘和 123 网盘。网页面板用 Vue 3。
+
+驱动逻辑严格对齐 OpenList 4.2.6 的 Go 源码（`drivers/quark_uc`、`drivers/123`），不做任何上传/管理功能。
+
+## 功能
+
+- **单二进制**：Vue 面板编译期嵌入 exe（rust-embed），分发只需一个文件
+- 账号管理：夸克（Cookie 认证）、123 网盘（账号密码登录，token 自动刷新持久化）
+- 文件浏览：分页拉取、面包屑导航、文件夹/文件列表（大小、修改时间）
+- **视频在线播放**：浏览器内直接播放（后端流式代理，支持 Range 拖动进度）
+- 下载：后端代理流式下载（转发 Range，支持断点续传），文件名正确编码
+- **面板登录鉴权**：用户名密码 + HttpOnly 会话 Cookie（7 天有效）
+- 夸克 `__puus` cookie 滚动更新自动回写；123 网盘 401 自动重登；123 列表接口 700ms 限速（对齐 Go 版）
+
+## 启动参数
+
+```
+openlist.exe [OPTIONS]
+
+  -a, --addr <ADDR>      监听地址，默认 127.0.0.1；局域网访问用 0.0.0.0
+  -p, --port <PORT>      监听端口，默认 5299
+  -c, --config <PATH>    配置文件路径，默认 data/config.json
+      --web-user <USER>  面板登录用户名（设置后启用鉴权）
+      --web-pass <PASS>  面板登录密码（缺省时随机生成并打印到控制台）
+```
+
+鉴权也可以用环境变量 `OPENLIST_WEB_USER` / `OPENLIST_WEB_PASS`。不设用户名时面板免登录。
+
+示例：
+
+```
+# 本机使用，免登录
+openlist-rs.exe
+
+# 局域网开放 + 鉴权，指定端口和配置位置
+openlist-rs.exe -a 0.0.0.0 -p 8080 --web-user admin --web-pass 123456 -c D:\olm\config.json
+
+# 只给用户名，密码随机生成（启动时打印）
+openlist-rs.exe --web-user admin
+```
+
+- 配置文件含明文凭据，注意保管
+- 会话保存在内存中，重启服务后需重新登录
+
+## 运行
+
+启动后访问 `http://<addr>:<port>`（默认 http://127.0.0.1:5299）。
+
+## 开发
+
+```
+# 后端（需要 x86_64-pc-windows-gnu 工具链 + MinGW，本机配置见 ~/.cargo/config.toml）
+cargo run
+
+# 前端（另开终端）
+cd web
+npm install
+npm run dev     # 开发模式，/api 代理到 5299
+npm run build   # 产物输出 web/dist/，cargo 编译时嵌入
+```
+
+## OpenList 官方 API 兼容层（NovaTV / TVBox / AList 客户端接入）
+
+实现 AList 协议三个核心端点，NovaTV 等客户端可直接把它当 OpenList 服务器添加：
+
+| 端点 | 说明 |
+|---|---|
+| POST `/api/auth/login` | `{username,password,otp_code}` → `data.token` |
+| POST `/api/fs/list` | `{path,page,per_page,...}` + `Authorization: <token>` 头 |
+| POST `/api/fs/get` | 返回 `raw_url`（指向本服务 `/p` 代理） |
+| GET `/d/{*path}` / `/p/{*path}` | 官方同款下载/代理路径，支持 Range |
+
+路径规则：根目录 `/` 下列出各账号文件夹（以备注名命名），进入即浏览对应网盘。响应结构与 OpenList 4.2.6 对齐（HTTP 200 + `{code,message,data}`、`type` 枚举 0未知/1文件夹/2视频/3音频、`raw_url` 为绝对地址）。
+
+NovaTV 接入：设置里添加 OpenList → 服务器地址填本服务地址 → 用户名密码填启动参数里的面板账号。
+
+## API（自有面板接口）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/auth/status` | 查询是否启用鉴权（免登录可访问） |
+| POST | `/api/login` | 面板登录 `{username, password}`，成功设置会话 Cookie |
+| POST | `/api/logout` | 退出登录 |
+| GET | `/api/accounts` | 列出账号 |
+| POST | `/api/accounts` | 添加账号 `{name, cookie}` 或 `{name, username, password}` |
+| DELETE | `/api/accounts/{id}` | 删除账号 |
+| GET | `/api/files?account=&fid=` | 列目录（fid 默认 `0` = 根目录） |
+| GET | `/api/download?account=&fid=&...` | 取直链（返回 url + 是否需代理） |
+| GET | `/api/stream?account=&fid=&name=&...&disp=inline` | 代理流式下载；`disp=inline` 用于在线播放 |
+
+## 架构
+
+```
+openlist-rs/
+├── src/
+│   ├── main.rs           CLI 参数（clap）+ 路由组装
+│   ├── state.rs          AppState（配置/驱动缓存/会话/路径索引）
+│   ├── auth.rs           面板鉴权：中间件 + login/logout/status
+│   ├── api.rs            自有面板 API（账号/文件/流式代理）
+│   ├── compat.rs         OpenList 官方 API 兼容层（AList 协议）
+│   ├── assets.rs         rust-embed 嵌入 web/dist + SPA 静态服务
+│   ├── config.rs         账号配置持久化 + 统一文件模型 Entry
+│   └── drivers/
+│       ├── mod.rs        Driver 枚举（Quark | Pan123）
+│       ├── quark.rs      夸克：/file/sort 列表、/file/download 直链、__puus 回写
+│       └── pan123.rs     123：登录、signPath CRC32 签名、/file/list/new、/file/download_info + 302
+├── web/                  Vue 3 + Vite 面板（登录页 / 文件浏览 / 视频播放器）
+└── .github/workflows/release.yml   推送 v* 标签自动构建 Linux amd64/arm64 发布
+```
+
+## 发布
+
+推送标签自动触发 GitHub Actions 构建 Linux 静态二进制（musl，TLS 用 rustls，无 openssl 依赖）：
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+产物：`openlist-rs-linux-amd64.tar.gz` / `openlist-rs-linux-arm64.tar.gz`（附 sha256）。
