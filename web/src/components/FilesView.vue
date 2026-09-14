@@ -36,7 +36,7 @@
           </template>
         </nav>
 
-        <div v-if="currentId" class="toolbar-actions">
+        <div class="toolbar-actions">
           <button class="btn-icon btn-ghost" title="刷新" @click="$emit('refresh')">
             <Icon name="refresh" :size="17" />
           </button>
@@ -51,103 +51,88 @@
         </div>
       </div>
 
-      <!-- 网盘列表（未选择网盘时） -->
-      <div v-if="!currentId" class="card table-card drive-table">
-        <table>
-          <thead>
-            <tr>
-              <th class="col-name">网盘</th>
-              <th class="col-size">类型</th>
-              <th class="col-op"></th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in accounts" :key="a.id" class="drive-row" @click="$emit('open-account', a.id)">
-              <td class="col-name">
-                <span class="fname">
-                  <span class="ficon drive-icon"><Icon name="cloud" :size="19" /></span>
-                  {{ a.name }}
-                </span>
-              </td>
-              <td class="col-size">{{ driverLabels[a.driver] || a.driver }}</td>
-              <td class="col-op">
-                <Icon name="chevron-right" :size="16" class="drive-go" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <div v-if="err" class="alert alert-error">{{ err }}</div>
 
-      <template v-else>
-        <div v-if="err" class="alert alert-error">{{ err }}</div>
-
-        <!-- 加载中 -->
-        <div v-if="loading" class="state-box card">
+      <!-- 加载中（进入网盘后） -->
+      <div v-if="currentId && loading" class="state-box card">
         <span class="spin loader-lg"></span>
         <span>加载中…</span>
       </div>
 
       <!-- 空目录 -->
-      <div v-else-if="entries.length === 0" class="state-box card">
+      <div v-else-if="currentId && entries.length === 0" class="state-box card">
         <Icon name="inbox" :size="34" />
         <span>此文件夹为空</span>
       </div>
 
-      <!-- 列表视图 -->
+      <!-- 统一列表视图：根目录显示网盘列表，进入网盘后显示文件列表 -->
       <div v-else-if="viewMode === 'list'" class="card table-card">
         <table>
           <thead>
             <tr>
-              <th class="col-name">文件名</th>
+              <th class="col-name">名称</th>
               <th class="col-size">大小</th>
               <th class="col-date">修改时间</th>
               <th class="col-op"></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="e in entries" :key="e.fid" @dblclick="rowActivate(e)">
+            <tr
+              v-for="e in displayEntries"
+              :key="e.key"
+              :class="{ 'drive-row': e.is_drive }"
+              @click="e.is_drive && $emit('open-account', e.id)"
+              @dblclick="!e.is_drive && rowActivate(e)"
+            >
               <td class="col-name">
-                <a
-                  v-if="e.is_dir"
-                  href="#"
-                  class="fname"
-                  @click.prevent="$emit('open-dir', e)"
-                >
+                <a v-if="e.is_dir && !e.is_drive" href="#" class="fname" @click.prevent="$emit('open-dir', e)">
                   <span class="ficon"><FileIcon :name="e.name" :is-dir="true" /></span>
                   {{ e.name }}
                 </a>
                 <span v-else class="fname">
-                  <span class="ficon"><FileIcon :name="e.name" :is-dir="false" /></span>
+                  <span class="ficon" :class="{ 'drive-icon': e.is_drive }">
+                    <Icon v-if="e.is_drive" name="cloud" :size="19" />
+                    <FileIcon v-else :name="e.name" :is-dir="false" />
+                  </span>
                   {{ e.name }}
+                  <span v-if="e.is_drive" class="drive-type">{{ driverLabels[e.driver] || e.driver }}</span>
                 </span>
               </td>
-              <td class="col-size">{{ e.is_dir ? '-' : fmtSize(e.size) }}</td>
-              <td class="col-date">{{ fmtDate(e.updated_at) }}</td>
+              <td class="col-size">{{ e.is_dir || e.is_drive ? '-' : fmtSize(e.size) }}</td>
+              <td class="col-date">{{ e.updated_at ? fmtDate(e.updated_at) : '-' }}</td>
               <td class="col-op">
-                <button v-if="isVideo(e)" class="btn-icon btn-ghost" title="播放" @click="$emit('play', e)">
-                  <Icon name="play" :size="15" />
-                </button>
-                <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="下载" @click="$emit('download', e)">
-                  <Icon name="download" :size="15" />
-                </button>
+                <template v-if="e.is_drive">
+                  <Icon name="chevron-right" :size="16" class="drive-go" />
+                </template>
+                <template v-else>
+                  <button v-if="isVideo(e)" class="btn-icon btn-ghost" title="播放" @click="$emit('play', e)">
+                    <Icon name="play" :size="15" />
+                  </button>
+                  <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="下载" @click="$emit('download', e)">
+                    <Icon name="download" :size="15" />
+                  </button>
+                </template>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <!-- 宫格视图 -->
+      <!-- 统一宫格视图 -->
       <div v-else class="grid-view">
         <div
-          v-for="e in entries"
-          :key="e.fid"
+          v-for="e in displayEntries"
+          :key="e.key"
           class="grid-item"
-          @click="e.is_dir ? $emit('open-dir', e) : (isVideo(e) ? $emit('play', e) : $emit('download', e))"
+          @click="e.is_drive ? $emit('open-account', e.id) : (e.is_dir ? $emit('open-dir', e) : (isVideo(e) ? $emit('play', e) : $emit('download', e)))"
         >
-          <div class="grid-icon"><FileIcon :name="e.name" :is-dir="e.is_dir" /></div>
+          <div class="grid-icon">
+            <Icon v-if="e.is_drive" name="cloud" :size="32" class="grid-drive-icon" />
+            <FileIcon v-else :name="e.name" :is-dir="e.is_dir" />
+          </div>
           <div class="grid-name" :title="e.name">{{ e.name }}</div>
-          <div class="grid-meta">{{ e.is_dir ? '文件夹' : fmtSize(e.size) }}</div>
-          <div class="grid-hover-actions" v-if="!e.is_dir">
+          <div class="grid-meta">{{ e.is_drive ? (driverLabels[e.driver] || e.driver) : (e.is_dir ? '文件夹' : fmtSize(e.size)) }}</div>
+          <div class="grid-hover-actions" v-if="!e.is_drive && !e.is_dir">
             <button v-if="isVideo(e)" class="btn-icon btn-ghost sm" title="播放" @click.stop="$emit('play', e)">
               <Icon name="play" :size="13" />
             </button>
@@ -157,12 +142,12 @@
           </div>
         </div>
       </div>
-      </template>
     </template>
   </div>
 </template>
 
 <script setup>
+import { computed } from 'vue'
 import Icon from './Icon.vue'
 import FileIcon from './FileIcon.vue'
 
@@ -180,6 +165,23 @@ const emit = defineEmits([
   'go-accounts', 'go-home', 'open-account', 'switch-account', 'goto', 'refresh', 'update:view-mode',
   'open-dir', 'play', 'download'
 ])
+
+// 统一数据源：根目录（未选网盘）时把网盘映射为“文件夹”行，进入网盘后为文件条目
+const displayEntries = computed(() => {
+  if (props.currentId) {
+    return props.entries.map((e) => ({ ...e, key: e.fid }))
+  }
+  return props.accounts.map((a) => ({
+    key: 'drive-' + a.id,
+    id: a.id,
+    name: a.name,
+    is_dir: true,
+    is_drive: true,
+    driver: a.driver,
+    size: null,
+    updated_at: null
+  }))
+})
 
 const VIDEO_EXT = ['mp4', 'mkv', 'webm', 'mov', 'm4v', 'avi', 'flv', 'ts', 'wmv', 'rmvb', '3gp']
 const isVideo = (e) => !e.is_dir && VIDEO_EXT.includes(e.name.split('.').pop()?.toLowerCase())
@@ -232,6 +234,7 @@ function fmtDate(ms) {
   gap: 14px;
   margin-bottom: 14px;
   flex-wrap: wrap;
+  min-height: 36px;
 }
 .storage-select select {
   width: auto;
@@ -381,8 +384,8 @@ a.fname:hover {
   flex-shrink: 0;
 }
 
-/* 网盘列表 */
-.drive-table tbody tr {
+/* 网盘行（根目录） */
+.drive-row {
   cursor: pointer;
 }
 .drive-icon {
@@ -394,6 +397,15 @@ a.fname:hover {
   border-radius: 9px;
   background: var(--ol-primary-light);
   color: var(--ol-primary);
+}
+.drive-type {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--ol-text-faint);
+  background: var(--ol-bg);
+  border: 1px solid var(--ol-border);
+  border-radius: 999px;
 }
 .drive-go {
   color: var(--ol-text-faint);

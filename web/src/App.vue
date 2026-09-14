@@ -74,7 +74,7 @@
       @open-account="onSwitchAccount"
       @switch-account="onSwitchAccount"
       @goto="goto"
-      @refresh="() => listFiles(crumbs[crumbs.length - 1].fid)"
+      @refresh="refreshCurrent"
       @open-dir="openDir"
       @play="play"
       @download="download"
@@ -270,6 +270,15 @@ function goHome() {
   currentId.value = ''
   entries.value = []
   crumbs.value = [{ fid: '0', name: '网盘' }]
+}
+
+// 刷新：根目录重新拉取网盘列表，进入网盘后刷新当前目录
+async function refreshCurrent() {
+  if (!currentId.value) {
+    await loadAccounts()
+    return
+  }
+  await listFiles(crumbs.value[crumbs.value.length - 1].fid)
 }
 
 async function listFiles(fid) {
