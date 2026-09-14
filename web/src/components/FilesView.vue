@@ -16,7 +16,7 @@
             <template v-for="(c, i) in crumbs" :key="c.fid + i">
               <span class="crumb-sep">/</span>
               <a
-                v-if="i !== crumbs.length - 1"
+                v-if="playing || i !== crumbs.length - 1"
                 href="#"
                 class="crumb-link"
                 @click.prevent="$emit('goto', i)"

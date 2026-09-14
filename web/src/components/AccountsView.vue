@@ -348,8 +348,9 @@ const badgeStyle = (d) => {
 
 <style scoped>
 .accounts-page {
-  max-width: none;
-  padding: 24px 20px 60px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 20px 60px;
 }
 
 /* 页头：标题 + 添加按钮 */
