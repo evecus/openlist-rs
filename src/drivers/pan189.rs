@@ -9,7 +9,7 @@
 //! 上传、秒传等能力未实现（openlist-rs 仅支持 list + download）。
 
 use super::DownloadInfo;
-use crate::config::{Entry, Store};
+use crate::config::Entry;
 use base64::Engine;
 use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -18,7 +18,6 @@ use reqwest::{Client, Method};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use serde_json::Value;
-use std::sync::Arc;
 
 const LOGIN_URL: &str = "https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https%3A%2F%2Fcloud.189.cn%2Fmain.action";
 const LOGIN_OK_URL: &str = "https://cloud.189.cn/web/main";
@@ -28,14 +27,12 @@ const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (
 const DEFAULT_ROOT: &str = "-11";
 
 pub struct Cloud189 {
-    account_id: String,
     /// 带 cookie 会话的客户端（登录态保存在共享 cookie jar 中）
     http: Client,
     /// 不跟随重定向的客户端（与 http 共享 cookie jar，用于拿 302 直链）
     http_no_redirect: Client,
     username: String,
     password: String,
-    store: Arc<Store>,
 }
 
 /// 解析 "2024-01-02 15:04:05"（北京时间）-> epoch 毫秒（对齐 Go MustParseCNTime）
@@ -88,12 +85,7 @@ fn rsa_encrypt_hex(data: &[u8], j_rsakey: &str) -> Result<String, String> {
 }
 
 impl Cloud189 {
-    pub fn new(
-        account_id: &str,
-        username: String,
-        password: String,
-        store: Arc<Store>,
-    ) -> Self {
+    pub fn new(username: String, password: String) -> Self {
         // 共享 cookie jar：登录态在两个 client 之间通用（对齐 Go resty.NewWithClient(d.client)）
         let jar = Arc::new(reqwest::cookie::Jar::default());
         let mut headers = HeaderMap::new();
@@ -114,12 +106,10 @@ impl Cloud189 {
             .build()
             .unwrap();
         Cloud189 {
-            account_id: account_id.to_string(),
             http,
             http_no_redirect,
             username,
             password,
-            store,
         }
     }
 

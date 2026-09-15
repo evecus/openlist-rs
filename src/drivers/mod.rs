@@ -102,9 +102,9 @@ impl Driver {
                 drive_type.clone(),
                 store,
             )),
-            Credential::Cloud189 { username, password, .. } => Driver::Cloud189(
-                pan189::Cloud189::new(id, username.clone(), password.clone(), store),
-            ),
+            Credential::Cloud189 { username, password, .. } => {
+                Driver::Cloud189(pan189::Cloud189::new(username.clone(), password.clone()))
+            }
         };
         // 统一验证凭据（对齐各驱动 Init()）
         match &d {
