@@ -185,17 +185,18 @@ impl Weiyun {
                 .unwrap_or("unknown");
             return Err(format!("微信刷新 token 失败(errcode={errcode}): {errmsg}"));
         }
-        // 对齐 SetCookieValue：只回写 cookie 中已存在的同名字段
+        // 对齐 SetCookieValue：回写 cookie 中的同名字段（无则新增）
         let mut map = self.cookies.lock().unwrap();
         let mut order = self.cookie_order.lock().unwrap();
         for key in ["openid", "access_token", "refresh_token"] {
             if let Some(nv) = v.get(key).and_then(|x| x.as_str()) {
-                if map.contains_key(key) && !nv.is_empty() {
-                    map.insert(key.to_string(), nv.to_string());
-                } else if !map.contains_key(key) && !nv.is_empty() {
-                    order.push(key.to_string());
-                    map.insert(key.to_string(), nv.to_string());
+                if nv.is_empty() {
+                    continue;
                 }
+                if !map.contains_key(key) {
+                    order.push(key.to_string());
+                }
+                map.insert(key.to_string(), nv.to_string());
             }
         }
         Ok(())
@@ -233,7 +234,10 @@ impl Weiyun {
                     Err(e2) if e2 == EXPIRED
                         && matches!(self.login_type(), "weixin" | "weixin_openid") =>
                     {
-                        self.weixin_refresh_token().await.and_then(|_| self.refresh_ctoken().await)
+                        match self.weixin_refresh_token().await {
+                            Ok(()) => self.refresh_ctoken().await,
+                            Err(e3) => Err(e3),
+                        }
                     }
                     other => other,
                 };
@@ -352,7 +356,9 @@ impl Weiyun {
                 .and_then(|x| x.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            return Ok(Err(format!("微云接口错误(retcode={retcode}): {msg}")));
+            return Ok(Err(format!(
+                "微云接口错误({cmd_name} retcode={retcode}): {msg}"
+            )));
         }
         let body = v
             .pointer("/data/rsp_body/RspMsg_body")
