@@ -18,6 +18,7 @@ use reqwest::{Client, Method};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 use serde_json::Value;
+use std::sync::Arc;
 
 const LOGIN_URL: &str = "https://cloud.189.cn/api/portal/loginUrl.action?redirectURL=https%3A%2F%2Fcloud.189.cn%2Fmain.action";
 const LOGIN_OK_URL: &str = "https://cloud.189.cn/web/main";
