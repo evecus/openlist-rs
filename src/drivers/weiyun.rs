@@ -19,6 +19,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const BASE: &str = "https://www.weiyun.com";
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// cookie 过期错误标记（对齐 ErrCookieExpiration）
+const EXPIRED: &str = "微云 cookie 已过期，请重新获取";
 
 pub struct Weiyun {
     http: Client,
@@ -67,6 +69,27 @@ impl Weiyun {
             .filter_map(|k| map.get(k).map(|v| format!("{k}={v}")))
             .collect::<Vec<_>>()
             .join("; ")
+    }
+
+    /// 对齐 Go 版 cookie jar：每次响应的 Set-Cookie 滚动并入 cookie 存储，
+    /// 微云会经 Set-Cookie 轮换会话字段，丢弃会导致后续请求被网关拒绝
+    fn store_cookies(&self, headers: &reqwest::header::HeaderMap) {
+        let mut map = self.cookies.lock().unwrap();
+        let mut order = self.cookie_order.lock().unwrap();
+        for v in headers.get_all(reqwest::header::SET_COOKIE) {
+            let Ok(s) = v.to_str() else { continue };
+            // 只取第一个 k=v 对（忽略 Path/Domain/Expires 等属性）
+            let Some(pair) = s.split(';').next() else { continue };
+            let Some((k, val)) = pair.split_once('=') else { continue };
+            let (k, val) = (k.trim(), val.trim());
+            if k.is_empty() || val.is_empty() {
+                continue;
+            }
+            if !map.contains_key(k) {
+                order.push(k.to_string());
+            }
+            map.insert(k.to_string(), val.to_string());
+        }
     }
 
     /// 对齐 LoginType()
@@ -124,8 +147,56 @@ impl Weiyun {
             .send()
             .await
             .map_err(|e| format!("刷新微云会话失败: {e}"))?;
+        self.store_cookies(resp.headers());
         if resp.status().is_redirection() || resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err("微云 cookie 已过期，请重新获取".into());
+            return Err(EXPIRED.to_string());
+        }
+        Ok(())
+    }
+
+    /// 对齐 WeiXinRefreshToken()：微信登录 cookie 过期时刷 access_token，
+    /// 依赖 cookie 中的 wy_appid / refresh_token，成功后回写 openid / access_token / refresh_token
+    async fn weixin_refresh_token(&self) -> Result<(), String> {
+        let (appid, rt) = (self.cookie("wy_appid"), self.cookie("refresh_token"));
+        if appid.is_empty() || rt.is_empty() {
+            return Err("微信刷新 token 缺少 wy_appid / refresh_token cookie".into());
+        }
+        let resp = self
+            .http
+            .get("https://api.weixin.qq.com/sns/oauth2/refresh_token")
+            .query(&[
+                ("grant_type", "refresh_token"),
+                ("appid", appid.as_str()),
+                ("refresh_token", rt.as_str()),
+            ])
+            .header("user-agent", UA)
+            .send()
+            .await
+            .map_err(|e| format!("微信刷新 token 请求失败: {e}"))?;
+        let v: Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("微信刷新 token 响应解析失败: {e}"))?;
+        let errcode = v.get("errcode").and_then(|x| x.as_i64()).unwrap_or(0);
+        if errcode != 0 {
+            let errmsg = v
+                .get("errmsg")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("微信刷新 token 失败(errcode={errcode}): {errmsg}"));
+        }
+        // 对齐 SetCookieValue：只回写 cookie 中已存在的同名字段
+        let mut map = self.cookies.lock().unwrap();
+        let mut order = self.cookie_order.lock().unwrap();
+        for key in ["openid", "access_token", "refresh_token"] {
+            if let Some(nv) = v.get(key).and_then(|x| x.as_str()) {
+                if map.contains_key(key) && !nv.is_empty() {
+                    map.insert(key.to_string(), nv.to_string());
+                } else if !map.contains_key(key) && !nv.is_empty() {
+                    order.push(key.to_string());
+                    map.insert(key.to_string(), nv.to_string());
+                }
+            }
         }
         Ok(())
     }
@@ -145,7 +216,7 @@ impl Weiyun {
         match resp {
             Ok(v) => Ok(v),
             Err(e) if e.contains("HTTP 403") => {
-                // 单飞刷新后重试一次
+                // 单飞刷新后重试一次；微信登录先刷微信 token 再验证（对齐 Request() 403 分支）
                 let should_refresh = {
                     let mut flag = self.refreshing.lock().unwrap();
                     if *flag {
@@ -158,7 +229,14 @@ impl Weiyun {
                 if !should_refresh {
                     return Err(e);
                 }
-                let r = self.refresh_ctoken().await;
+                let r = match self.refresh_ctoken().await {
+                    Err(e2) if e2 == EXPIRED
+                        && matches!(self.login_type(), "weixin" | "weixin_openid") =>
+                    {
+                        self.weixin_refresh_token().await.and_then(|_| self.refresh_ctoken().await)
+                    }
+                    other => other,
+                };
                 *self.refreshing.lock().unwrap() = false;
                 r?;
                 let resp = self.do_request(protocol, cmd_name, cmd, &body).await?;
@@ -239,15 +317,19 @@ impl Weiyun {
             .await
             .map_err(|e| format!("微云请求失败: {e}"))?;
         let status = resp.status().as_u16();
+        self.store_cookies(resp.headers());
         let text = resp.text().await.map_err(|e| format!("读取响应失败: {e}"))?;
         if status != 200 {
             if status == 403 {
                 return Ok(Err("HTTP 403（会话可能已过期）".into()));
             }
-            return Err(format!("微云服务器返回 HTTP {status}"));
+            return Err(format!(
+                "微云服务器返回 HTTP {status}（{cmd_name}）: {}",
+                trunc300(&text)
+            ));
         }
-        let v: Value =
-            serde_json::from_str(&text).map_err(|e| format!("微云响应解析失败: {e}"))?;
+        let v: Value = serde_json::from_str(&text)
+            .map_err(|e| format!("微云响应解析失败: {e}: {}", trunc300(&text)))?;
         let ret = v.get("ret").and_then(|x| x.as_i64()).unwrap_or(-1);
         if ret != 0 {
             let msg = v
@@ -255,7 +337,10 @@ impl Weiyun {
                 .and_then(|x| x.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            return Ok(Err(format!("微云接口错误(ret={ret}): {msg}")));
+            return Ok(Err(format!(
+                "微云接口错误({cmd_name} ret={ret}): {msg}；响应: {}",
+                trunc300(&text)
+            )));
         }
         let retcode = v
             .pointer("/data/rsp_header/retcode")
@@ -474,6 +559,11 @@ fn json_num_or_str_ms(v: Option<&Value>) -> Option<i64> {
         Value::String(s) => s.parse().ok(),
         _ => None,
     }
+}
+
+/// 错误信息里附带的原始响应片段（按字符截断，避免 UTF-8 边界 panic）
+fn trunc300(s: &str) -> String {
+    s.chars().take(300).collect()
 }
 
 /// 解析 "k=v; k2=v2" cookie 串（保留顺序，去重取后值）
