@@ -163,12 +163,14 @@ impl Driver {
                 access_token,
             } => Driver::Onedrive(onedrive::Onedrive::new(
                 id,
-                region.clone(),
-                *is_sharepoint,
-                site_id.clone(),
-                root_path.clone(),
-                refresh_token.clone(),
-                access_token.clone(),
+                onedrive::OnedriveConfig {
+                    region: region.clone(),
+                    is_sharepoint: *is_sharepoint,
+                    site_id: site_id.clone(),
+                    root_path: root_path.clone(),
+                    refresh_token: refresh_token.clone(),
+                    access_token: access_token.clone(),
+                },
                 store,
             )),
             Credential::GoogleDrive {

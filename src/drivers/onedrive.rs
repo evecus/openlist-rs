@@ -58,26 +58,27 @@ fn host_of(region: &str) -> (&'static str, &'static str) {
     }
 }
 
+/// 构造参数（避免 8 参构造函数触发 clippy::too_many_arguments）
+pub struct OnedriveConfig {
+    pub region: String,
+    pub is_sharepoint: bool,
+    pub site_id: String,
+    pub root_path: String,
+    pub refresh_token: String,
+    pub access_token: String,
+}
+
 impl Onedrive {
-    pub fn new(
-        account_id: &str,
-        region: String,
-        is_sharepoint: bool,
-        site_id: String,
-        root_path: String,
-        refresh_token: String,
-        access_token: String,
-        store: Arc<Store>,
-    ) -> Self {
+    pub fn new(account_id: &str, cfg: OnedriveConfig, store: Arc<Store>) -> Self {
         Onedrive {
             account_id: account_id.to_string(),
             http: Client::new(),
-            region,
-            is_sharepoint,
-            site_id,
-            root_path,
-            refresh_token: Mutex::new(refresh_token),
-            access_token: Mutex::new(access_token),
+            region: cfg.region,
+            is_sharepoint: cfg.is_sharepoint,
+            site_id: cfg.site_id,
+            root_path: cfg.root_path,
+            refresh_token: Mutex::new(cfg.refresh_token),
+            access_token: Mutex::new(cfg.access_token),
             store,
         }
     }

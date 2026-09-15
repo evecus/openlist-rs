@@ -453,7 +453,7 @@ pub(crate) async fn add_account(
             req.name.trim().to_string()
         },
         cred,
-        root_fid: root_fid.into(),
+        root_fid,
         server_proxy: req.server_proxy,
     };
     {

@@ -88,7 +88,7 @@ impl Webdav {
         let dir = self.resolve_abs(parent_fid);
         let resp = self
             .http
-            .request(Method::from_bytes(b"PROPFIND").unwrap(), &format!("{}{}", self.origin, encode_vpath(&dir)))
+            .request(Method::from_bytes(b"PROPFIND").unwrap(), format!("{}{}", self.origin, encode_vpath(&dir)))
             .basic_auth(&self.username, Some(&self.password))
             .header("Depth", "1")
             .header("Content-Type", "application/xml")
