@@ -334,7 +334,9 @@ impl Weiyun {
         }
         let v: Value = serde_json::from_str(&text)
             .map_err(|e| format!("微云响应解析失败: {e}: {}", trunc300(&text)))?;
-        let ret = v.get("ret").and_then(|x| x.as_i64()).unwrap_or(-1);
+        // 顶层 ret 字段缺失 = 成功（对齐 Go：json 反序列化缺省 0），
+        // 实测 DiskUserInfoGet 响应只有 data.rsp_header.retcode，无顶层 ret
+        let ret = v.get("ret").and_then(|x| x.as_i64()).unwrap_or(0);
         if ret != 0 {
             let msg = v
                 .get("msg")
