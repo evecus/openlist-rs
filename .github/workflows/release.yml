@@ -1,12 +1,13 @@
-name: Release
+name: release
 
-# 推送 v* 标签时触发：在原生 runner 上构建 Linux 静态二进制并发布 Release
-# amd64 → ubuntu-latest；arm64 → ubuntu-24.04-arm（公共仓库免费的原生 ARM runner）
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.0.0)"
+        required: true
+        default: 'v0.1.0'
+        type: string
 
 permissions:
   contents: write
@@ -41,6 +42,15 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
+      - name: Inject version into Cargo.toml
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          VERSION="${VERSION#v}"
+          sed -i.bak "s/^version = .*/version = \"${VERSION}\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          
+
       # 2. Rust 工具链（原生架构，无需交叉工具链）
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -49,6 +59,9 @@ jobs:
       # 3. musl 环境（musl-tools 提供 musl-gcc）
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Update Cargo.lock
+        run: cargo update
 
       - name: Set linker env
         run: |
@@ -83,6 +96,7 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v0.1.2
+          tag_name: ${{ github.event.inputs.version }}
+          name: openlist-rs ${{ github.event.inputs.version }}
           files: |
             ${{ matrix.artifact }}.tar.gz
