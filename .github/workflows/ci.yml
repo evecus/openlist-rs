@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. 前端构建（产物 web/dist 由 rust-embed 在编译期嵌入）
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      # 2. Rust 工具链（稳定版 + clippy）
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # 3. 依赖缓存（按 Cargo.lock 指纹）
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 4. 类型检查
+      - name: cargo check
+        run: cargo check --locked --all-targets
+
+      # 5. Clippy 静态检查（警告即失败）
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # 6. 单元测试（驱动内的纯函数测试：m115 加密、时间解析等）
+      - name: cargo test
+        run: cargo test --locked
