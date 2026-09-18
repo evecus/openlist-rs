@@ -1,4 +1,4 @@
-name: release-android
+name: android test
 
 on:
   workflow_dispatch:
