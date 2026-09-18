@@ -118,6 +118,16 @@
     <template v-else-if="name === 'eye'">
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" />
     </template>
+    <template v-else-if="name === 'upload'">
+      <path d="M12 16V4" /><polyline points="7 9 12 4 17 9" /><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+    </template>
+    <template v-else-if="name === 'copy'">
+      <rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </template>
+    <template v-else-if="name === 'move'">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v2" />
+      <line x1="12" y1="14" x2="12" y2="20" /><polyline points="9 17 12 20 15 17" />
+    </template>
   </svg>
 </template>
 

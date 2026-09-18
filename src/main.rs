@@ -59,6 +59,15 @@ async fn main() {
         .route("/api/auth/login", post(compat::compat_login))
         .route("/api/fs/list", post(compat::compat_fs_list))
         .route("/api/fs/get", post(compat::compat_fs_get))
+        // 写操作（对齐 Go 版 OpenList 端点）
+        .route("/api/fs/mkdir", post(compat::compat_fs_mkdir))
+        .route("/api/fs/rename", post(compat::compat_fs_rename))
+        .route("/api/fs/move", post(compat::compat_fs_move))
+        .route("/api/fs/copy", post(compat::compat_fs_copy))
+        .route("/api/fs/remove", post(compat::compat_fs_remove))
+        .route("/api/fs/put", post(compat::compat_fs_put))
+        .route("/api/fs/form", post(compat::compat_fs_form))
+        .route("/api/fs/put/progress", get(compat::compat_fs_put_progress))
         .route("/d/{*path}", get(compat::compat_down))
         .route("/p/{*path}", get(compat::compat_proxy))
         .layer(axum::middleware::from_fn_with_state(

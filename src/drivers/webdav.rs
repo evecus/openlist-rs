@@ -160,6 +160,184 @@ impl Webdav {
             local_path: None,
         })
     }
+
+    // ---------- 写操作（对齐 Go 版 MakeDir/Move/Rename/Copy/Remove/Put） ----------
+
+    /// 发送 MOVE / COPY 请求（Destination 头指向目标绝对路径，对齐 gowebdav）
+    async fn move_or_copy(
+        &self,
+        method: &str,
+        src_abs: &str,
+        dst_abs: &str,
+    ) -> Result<(), String> {
+        let url = format!("{}{}", self.origin, encode_vpath(src_abs));
+        let dest = format!("{}{}", self.origin, encode_vpath(dst_abs));
+        let resp = self
+            .http
+            .request(Method::from_bytes(method.as_bytes()).unwrap(), &url)
+            .basic_auth(&self.username, Some(&self.password))
+            .header("Destination", &dest)
+            .header("Overwrite", "T")
+            .send()
+            .await
+            .map_err(|e| format!("{method} 请求失败: {e}"))?;
+        check_dav_status(resp.status().as_u16(), method)
+    }
+
+    /// 对齐 MakeDir：MKCOL（逐级创建，对齐 gowebdav MkdirAll）
+    pub async fn mkdir(&self, parent_fid: &str, name: &str) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("目录名为空".into());
+        }
+        let base = self.resolve_abs(parent_fid);
+        // MkdirAll：逐级 MKCOL（已存在视为成功）
+        let mut cur = base;
+        for seg in normalize_vpath(name).split('/').filter(|s| !s.is_empty()) {
+            cur = join_vpath(&cur, &format!("/{seg}"));
+            let url = format!("{}{}", self.origin, encode_vpath(&cur));
+            let resp = self
+                .http
+                .request(Method::from_bytes(b"MKCOL").unwrap(), &url)
+                .basic_auth(&self.username, Some(&self.password))
+                .send()
+                .await
+                .map_err(|e| format!("MKCOL 请求失败: {e}"))?;
+            let status = resp.status().as_u16();
+            // 405 = 已存在（MkdirAll 语义：容忍），201 = 创建成功
+            if status != 405 && status != 201 && !(200..300).contains(&status) {
+                return Err(format!("MKCOL {cur} 返回 {status}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// 对齐 Move：MOVE src -> dstDir/name（Overwrite: T）
+    pub async fn move_entry(
+        &self,
+        _parent_fid: &str,
+        e: &Entry,
+        dst_dir_fid: &str,
+    ) -> Result<(), String> {
+        let src = self.resolve_abs(&e.fid);
+        let dst_dir = self.resolve_abs(dst_dir_fid);
+        let dst = join_vpath(&dst_dir, &format!("/{}", encode_vpath(&e.name)));
+        self.move_or_copy("MOVE", &src, &dst).await
+    }
+
+    /// 对齐 Rename：MOVE 同目录改名
+    pub async fn rename(&self, _parent_fid: &str, e: &Entry, new_name: &str) -> Result<(), String> {
+        if new_name.contains('/') {
+            return Err("名称不能包含 /".into());
+        }
+        let src = self.resolve_abs(&e.fid);
+        // 同目录：src 去掉末段 + 新名（对齐 path.Join(path.Dir(srcObj.GetPath()), newName)）
+        let parent = match src.rfind('/') {
+            Some(i) => src[..i].to_string(),
+            None => String::new(),
+        };
+        let dst = if parent.is_empty() {
+            format!("/{}", encode_vpath(new_name))
+        } else {
+            join_vpath(&parent, &format!("/{}", encode_vpath(new_name)))
+        };
+        self.move_or_copy("MOVE", &src, &dst).await
+    }
+
+    /// 对齐 Copy：COPY src -> dstDir/name（Overwrite: T）
+    pub async fn copy(&self, _parent_fid: &str, e: &Entry, dst_dir_fid: &str) -> Result<(), String> {
+        let src = self.resolve_abs(&e.fid);
+        let dst_dir = self.resolve_abs(dst_dir_fid);
+        let dst = join_vpath(&dst_dir, &format!("/{}", encode_vpath(&e.name)));
+        self.move_or_copy("COPY", &src, &dst).await
+    }
+
+    /// 对齐 Remove：DELETE（RemoveAll 语义，对齐 gowebdav RemoveAll）
+    pub async fn remove(&self, _parent_fid: &str, e: &Entry) -> Result<(), String> {
+        let path = self.resolve_abs(&e.fid);
+        let url = format!("{}{}", self.origin, encode_vpath(&path));
+        let resp = self
+            .http
+            .delete(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .send()
+            .await
+            .map_err(|e| format!("DELETE 请求失败: {e}"))?;
+        let status = resp.status().as_u16();
+        // 404 视为已删除（RemoveAll 幂等语义）
+        if status == 404 || status == 200 || status == 204 {
+            return Ok(());
+        }
+        Err(format!("DELETE 返回 {status}"))
+    }
+
+    /// 对齐 Put：PUT 流式上传（Content-Type 按扩展名推断；
+    /// 不手设 Content-Length，reqwest 对流式 body 走 chunked，避免与实际字节数冲突）
+    pub async fn put(&self, dst_dir_fid: &str, input: super::PutInput) -> Result<(), String> {
+        use tokio_util::io::ReaderStream;
+        let dst_dir = self.resolve_abs(dst_dir_fid);
+        let dst = join_vpath(&dst_dir, &format!("/{}", encode_vpath(&input.name)));
+        let url = format!("{}{}", self.origin, encode_vpath(&dst));
+        let mimetype = mime_by_ext(&input.name);
+        let resp = self
+            .http
+            .put(&url)
+            .basic_auth(&self.username, Some(&self.password))
+            .header("Content-Type", mimetype)
+            .body(reqwest::Body::wrap_stream(ReaderStream::with_capacity(
+                input.reader,
+                64 * 1024,
+            )))
+            .send()
+            .await
+            .map_err(|e| format!("PUT 请求失败: {e}"))?;
+        check_dav_status(resp.status().as_u16(), "PUT")
+    }
+}
+
+/// WebDAV 写操作状态码检查：2xx 视为成功
+fn check_dav_status(status: u16, op: &str) -> Result<(), String> {
+    if (200..300).contains(&status) {
+        Ok(())
+    } else if status == 401 {
+        Err("WebDAV 认证失败：用户名或密码错误".into())
+    } else {
+        Err(format!("{op} 返回 {status}"))
+    }
+}
+
+/// 扩展名 -> MIME（对齐 Go utils.GetMimeType 的常用集）
+fn mime_by_ext(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "txt" | "md" | "log" => "text/plain; charset=utf-8",
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "mp4" | "m4v" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "flv" => "video/x-flv",
+        "ts" => "video/mp2t",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" | "opus" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 // ---------- 路径工具 ----------

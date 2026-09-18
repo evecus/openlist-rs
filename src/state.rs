@@ -52,6 +52,11 @@ impl ListCache {
             .unwrap()
             .retain(|k, _| !k.starts_with(&prefix));
     }
+
+    /// 删除单条目录缓存（写操作后精确失效：key = "{账号id}:{fid}"）
+    pub(crate) fn invalidate_key(&self, key: &str) {
+        self.map.lock().unwrap().remove(key);
+    }
 }
 
 pub(crate) struct AuthCfg {
@@ -69,6 +74,9 @@ pub(crate) struct AppState {
     pub(crate) index: Arc<Mutex<HashMap<String, (String, Entry)>>>,
     /// 目录列表内存缓存（TTL 10 分钟）
     pub(crate) list_cache: Arc<ListCache>,
+    /// 活跃上传进度：key = 归一化路径，value = 已上传字节数
+    /// /api/fs/put、/api/fs/form 写入，完成后移除；/api/fs/put/progress 轮询
+    pub(crate) upload_progress: Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicU64>>>>,
 }
 
 impl AppState {
@@ -114,6 +122,7 @@ impl AppState {
             sessions: Arc::new(Mutex::new(HashSet::new())),
             index: Arc::new(Mutex::new(HashMap::new())),
             list_cache: Arc::new(ListCache::new()),
+            upload_progress: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

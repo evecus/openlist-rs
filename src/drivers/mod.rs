@@ -15,7 +15,10 @@ pub mod webdav;
 pub mod weiyun;
 
 use crate::config::{Credential, Entry, Store};
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::io::AsyncRead;
 
 /// 直链信息：url + 抓取该直链所需请求头 + 是否需要代理
 #[derive(Debug, Clone, serde::Serialize)]
@@ -27,6 +30,43 @@ pub struct DownloadInfo {
     /// 本机存储专用：非空时后端直接从磁盘流式读取（url 不使用）
     #[serde(skip)]
     pub local_path: Option<String>,
+}
+
+/// 上传输入：文件名 + 大小 + 内容流（对齐 Go 版 stream.FileStream 的最小集）
+pub struct PutInput {
+    pub name: String,
+    pub size: u64,
+    /// 上传内容流（/api/fs/put 原始 body 或 /api/fs/form 解出的文件流）
+    pub reader: Pin<Box<dyn AsyncRead + Send>>,
+}
+
+/// 包装 reader，把已读字节数累加到 progress（上传进度上报）
+pub struct ProgressReader<R> {
+    inner: R,
+    progress: Arc<AtomicU64>,
+}
+
+impl<R> ProgressReader<R> {
+    pub fn new(inner: R, progress: Arc<AtomicU64>) -> Self {
+        ProgressReader { inner, progress }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for ProgressReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let _ = Pin::new(&mut self.inner).poll_read(cx, buf)?;
+        let after = buf.filled().len();
+        if after > before {
+            self.progress
+                .fetch_add((after - before) as u64, Ordering::Relaxed);
+        }
+        std::task::Poll::Ready(Ok(()))
+    }
 }
 
 pub enum Driver {
@@ -243,6 +283,143 @@ impl Driver {
             Driver::Weiyun(d) => d.download(e).await,
             Driver::Onedrive(d) => d.download(e).await,
             Driver::GoogleDrive(d) => d.download(e).await,
+        }
+    }
+
+    /// 新建文件夹（对齐 Go 版 MakeDir）
+    pub async fn mkdir(&self, parent_fid: &str, name: &str) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan123(d) => d.mkdir(parent_fid, name).await,
+            Driver::AliyundriveOpen(d) => d.mkdir(parent_fid, name).await,
+            Driver::BaiduNetdisk(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan115(d) => d.mkdir(parent_fid, name).await,
+            Driver::Thunder(d) => d.mkdir(parent_fid, name).await,
+            Driver::Lanzou(d) => d.mkdir(parent_fid, name).await,
+            Driver::Yun139(d) => d.mkdir(parent_fid, name).await,
+            Driver::Cloud189(d) => d.mkdir(parent_fid, name).await,
+            Driver::Local(d) => d.mkdir(parent_fid, name),
+            Driver::Webdav(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan123Share(d) => d.mkdir(parent_fid, name).await,
+            Driver::Weiyun(d) => d.mkdir(parent_fid, name).await,
+            Driver::Onedrive(d) => d.mkdir(parent_fid, name).await,
+            Driver::GoogleDrive(d) => d.mkdir(parent_fid, name).await,
+        }
+    }
+
+    /// 重命名（对齐 Go 版 Rename）
+    pub async fn rename(&self, parent_fid: &str, e: &Entry, new_name: &str) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan123(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::AliyundriveOpen(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::BaiduNetdisk(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan115(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Thunder(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Lanzou(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Yun139(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Cloud189(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Local(d) => d.rename(parent_fid, e, new_name),
+            Driver::Webdav(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan123Share(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Weiyun(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Onedrive(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::GoogleDrive(d) => d.rename(parent_fid, e, new_name).await,
+        }
+    }
+
+    /// 移动（对齐 Go 版 Move）
+    pub async fn move_entry(
+        &self,
+        parent_fid: &str,
+        e: &Entry,
+        dst_dir_fid: &str,
+    ) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::AliyundriveOpen(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::BaiduNetdisk(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Thunder(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Lanzou(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Yun139(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Cloud189(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Local(d) => d.move_entry(parent_fid, e, dst_dir_fid),
+            Driver::Webdav(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Share(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Weiyun(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Onedrive(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::GoogleDrive(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+        }
+    }
+
+    /// 复制（对齐 Go 版 Copy；蓝奏云不支持）
+    pub async fn copy(
+        &self,
+        parent_fid: &str,
+        e: &Entry,
+        dst_dir_fid: &str,
+    ) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::AliyundriveOpen(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::BaiduNetdisk(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Thunder(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Lanzou(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Yun139(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Cloud189(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Local(d) => d.copy(parent_fid, e, dst_dir_fid),
+            Driver::Webdav(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Share(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Weiyun(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Onedrive(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::GoogleDrive(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+        }
+    }
+
+    /// 删除（对齐 Go 版 Remove）
+    pub async fn remove(&self, parent_fid: &str, e: &Entry) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.remove(parent_fid, e).await,
+            Driver::Pan123(d) => d.remove(parent_fid, e).await,
+            Driver::AliyundriveOpen(d) => d.remove(parent_fid, e).await,
+            Driver::BaiduNetdisk(d) => d.remove(parent_fid, e).await,
+            Driver::Pan115(d) => d.remove(parent_fid, e).await,
+            Driver::Thunder(d) => d.remove(parent_fid, e).await,
+            Driver::Lanzou(d) => d.remove(parent_fid, e).await,
+            Driver::Yun139(d) => d.remove(parent_fid, e).await,
+            Driver::Cloud189(d) => d.remove(parent_fid, e).await,
+            Driver::Local(d) => d.remove(parent_fid, e),
+            Driver::Webdav(d) => d.remove(parent_fid, e).await,
+            Driver::Pan123Share(d) => d.remove(parent_fid, e).await,
+            Driver::Weiyun(d) => d.remove(parent_fid, e).await,
+            Driver::Onedrive(d) => d.remove(parent_fid, e).await,
+            Driver::GoogleDrive(d) => d.remove(parent_fid, e).await,
+        }
+    }
+
+    /// 上传文件（对齐 Go 版 Put）。内容流被消耗；
+    /// 上传进度由调用方在 reader 外包 ProgressReader 统计，驱动不感知。
+    pub async fn put(&self, dst_dir_fid: &str, input: PutInput) -> Result<(), String> {
+        match self {
+            Driver::Quark(d) | Driver::QuarkUC(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan123(d) => d.put(dst_dir_fid, input).await,
+            Driver::AliyundriveOpen(d) => d.put(dst_dir_fid, input).await,
+            Driver::BaiduNetdisk(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan115(d) => d.put(dst_dir_fid, input).await,
+            Driver::Thunder(d) => d.put(dst_dir_fid, input).await,
+            Driver::Lanzou(d) => d.put(dst_dir_fid, input).await,
+            Driver::Yun139(d) => d.put(dst_dir_fid, input).await,
+            Driver::Cloud189(d) => d.put(dst_dir_fid, input).await,
+            Driver::Local(d) => d.put(dst_dir_fid, input).await,
+            Driver::Webdav(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan123Share(d) => d.put(dst_dir_fid, input).await,
+            Driver::Weiyun(d) => d.put(dst_dir_fid, input).await,
+            Driver::Onedrive(d) => d.put(dst_dir_fid, input).await,
+            Driver::GoogleDrive(d) => d.put(dst_dir_fid, input).await,
         }
     }
 }

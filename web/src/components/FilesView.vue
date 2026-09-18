@@ -31,18 +31,6 @@
           </template>
         </nav>
 
-        <div class="toolbar-actions">
-          <button
-            v-if="currentId"
-            class="btn-icon btn-ghost refresh-btn"
-            :class="{ spinning: refreshing }"
-            :disabled="refreshing"
-            title="刷新（忽略缓存，从网盘重新获取）"
-            @click="$emit('refresh')"
-          >
-            <Icon name="refresh" :size="16" />
-          </button>
-        </div>
       </div>
 
       <div v-if="err" class="alert alert-error">{{ err }}</div>
@@ -214,6 +202,20 @@
                   <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="下载" @click="$emit('download', e)">
                     <Icon name="download" :size="15" />
                   </button>
+                  <template v-if="canWrite">
+                    <button class="btn-icon btn-ghost" title="重命名" @click="$emit('rename', e)">
+                      <Icon name="edit" :size="15" />
+                    </button>
+                    <button class="btn-icon btn-ghost" title="移动到…" @click="$emit('move', e)">
+                      <Icon name="move" :size="15" />
+                    </button>
+                    <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="复制到…" @click="$emit('copy', e)">
+                      <Icon name="copy" :size="15" />
+                    </button>
+                    <button class="btn-icon btn-ghost op-del" title="删除" @click="$emit('remove', e)">
+                      <Icon name="trash" :size="15" />
+                    </button>
+                  </template>
                 </template>
               </td>
             </tr>
@@ -235,22 +237,75 @@
           </div>
           <div class="grid-name" :title="e.name">{{ e.name }}</div>
           <div class="grid-meta">{{ e.is_drive ? (driverLabels[e.driver] || e.driver) : (e.is_dir ? '文件夹' : fmtSize(e.size)) }}</div>
-          <div class="grid-hover-actions" v-if="!e.is_drive && !e.is_dir">
+          <div class="grid-hover-actions" v-if="!e.is_drive">
             <button
-              v-if="kindOf(e.name, e.is_dir)"
+              v-if="!e.is_dir && kindOf(e.name, e.is_dir)"
               class="btn-icon btn-ghost sm"
               :title="KIND_TITLE[kindOf(e.name, e.is_dir)]"
               @click.stop="$emit('preview', e)"
             >
               <Icon :name="KIND_ICON[kindOf(e.name, e.is_dir)]" :size="13" />
             </button>
-            <button class="btn-icon btn-ghost sm" title="下载" @click.stop="$emit('download', e)">
+            <button v-if="!e.is_dir" class="btn-icon btn-ghost sm" title="下载" @click.stop="$emit('download', e)">
               <Icon name="download" :size="13" />
             </button>
+            <template v-if="canWrite">
+              <button class="btn-icon btn-ghost sm" title="重命名" @click.stop="$emit('rename', e)">
+                <Icon name="edit" :size="13" />
+              </button>
+              <button class="btn-icon btn-ghost sm" title="移动到…" @click.stop="$emit('move', e)">
+                <Icon name="move" :size="13" />
+              </button>
+              <button v-if="!e.is_dir" class="btn-icon btn-ghost sm" title="复制到…" @click.stop="$emit('copy', e)">
+                <Icon name="copy" :size="13" />
+              </button>
+              <button class="btn-icon btn-ghost sm op-del" title="删除" @click.stop="$emit('remove', e)">
+                <Icon name="trash" :size="13" />
+              </button>
+            </template>
           </div>
         </div>
       </div>
       </template>
+
+      <!-- 右下角悬浮操作按钮（对齐 OpenList 官方前端交互） -->
+      <div v-if="currentId && !preview" class="fab-wrap">
+        <transition name="fab-pop">
+          <div v-if="fabOpen" class="fab-menu">
+            <button class="fab-item" @click="fabAct('mkdir')">
+              <Icon name="folder-plus" :size="16" />
+              <span>新建文件夹</span>
+            </button>
+            <button class="fab-item" @click="fabAct('upload')">
+              <Icon name="upload" :size="16" />
+              <span>上传文件</span>
+            </button>
+            <button class="fab-item" @click="fabAct('upload-folder')">
+              <Icon name="upload" :size="16" />
+              <span>上传文件夹</span>
+            </button>
+            <button class="fab-item" :disabled="refreshing" @click="fabAct('refresh')">
+              <Icon name="refresh" :size="16" :class="{ spinning: refreshing }" />
+              <span>刷新</span>
+            </button>
+          </div>
+        </transition>
+        <button class="fab" :class="{ open: fabOpen }" title="操作" @click="fabOpen = !fabOpen">
+          <Icon name="plus" :size="22" />
+        </button>
+      </div>
+
+      <!-- 隐藏的文件选择器 -->
+      <input ref="fileInput" type="file" multiple hidden @change="onFilesPicked" />
+      <input
+        ref="folderInput"
+        type="file"
+        multiple
+        hidden
+        webkitdirectory
+        directory
+        @change="onFilesPicked"
+      />
     </template>
   </div>
 </template>
@@ -271,11 +326,14 @@ const props = defineProps({
   refreshing: { type: Boolean, default: false },
   err: { type: String, default: '' },
   viewMode: { type: String, default: 'list' },
-  driverLabels: { type: Object, default: () => ({}) }
+  driverLabels: { type: Object, default: () => ({}) },
+  // 当前账号是否可写（123 分享等只读驱动隐藏写操作）
+  canWrite: { type: Boolean, default: false }
 })
 const emit = defineEmits([
   'go-accounts', 'go-home', 'open-account', 'switch-account', 'goto', 'refresh', 'update:view-mode',
-  'open-dir', 'preview', 'close-preview', 'download'
+  'open-dir', 'preview', 'close-preview', 'download',
+  'mkdir', 'rename', 'move', 'copy', 'remove', 'upload'
 ])
 
 // 统一数据源：根目录（未选网盘）时把网盘映射为“文件夹”行，进入网盘后为文件条目
@@ -407,6 +465,49 @@ function fmtDate(ms) {
   const p = (x) => String(x).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
+
+// ===== 右下角 FAB 操作菜单 =====
+const fabOpen = ref(false)
+const fileInput = ref(null)
+const folderInput = ref(null)
+let pickMode = 'files'
+
+function fabAct(act) {
+  fabOpen.value = false
+  if (act === 'mkdir') emit('mkdir')
+  else if (act === 'refresh') emit('refresh')
+  else if (act === 'upload') {
+    pickMode = 'files'
+    fileInput.value?.click()
+  } else if (act === 'upload-folder') {
+    pickMode = 'folder'
+    folderInput.value?.click()
+  }
+}
+
+function onFilesPicked(ev) {
+  const files = Array.from(ev.target.files || [])
+  ev.target.value = ''
+  if (files.length === 0) return
+  const isFolder = pickMode === 'folder'
+  emit(
+    'upload',
+    files.map((f) => ({
+      file: f,
+      // 文件夹上传时保留相对路径（含中间目录），单文件只用文件名
+      relPath: isFolder ? (f.webkitRelativePath || f.name) : f.name
+    }))
+  )
+}
+
+// 点击 FAB 菜单外部时收起
+function onDocClick(ev) {
+  if (!fabOpen.value) return
+  if (ev.target.closest?.('.fab-wrap')) return
+  fabOpen.value = false
+}
+onMounted(() => document.addEventListener('click', onDocClick))
+onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 </script>
 
 <style scoped>
@@ -484,6 +585,84 @@ function fmtDate(ms) {
   gap: 8px;
   margin-left: auto;
 }
+.op-del:hover {
+  color: #e5484d;
+}
+
+/* 右下角 FAB 操作菜单（对齐 OpenList 官方前端） */
+.fab-wrap {
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+.fab {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #5b7dff, #7c4dff);
+  box-shadow: 0 8px 24px rgba(91, 125, 255, 0.4);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.fab:hover {
+  transform: scale(1.06);
+  box-shadow: 0 10px 28px rgba(91, 125, 255, 0.5);
+}
+.fab.open {
+  transform: rotate(45deg);
+}
+.fab-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px;
+  background: var(--ol-panel);
+  border: 1px solid var(--ol-border);
+  border-radius: var(--ol-radius-sm, 10px);
+  box-shadow: var(--ol-shadow, 0 8px 30px rgba(0, 0, 0, 0.12));
+  min-width: 148px;
+}
+.fab-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--ol-text);
+  font-size: 13.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fab-item:hover {
+  background: var(--ol-primary-light);
+  color: var(--ol-primary);
+}
+.fab-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.fab-pop-enter-active,
+.fab-pop-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.fab-pop-enter-from,
+.fab-pop-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+}
 .refresh-btn {
   color: var(--ol-text-dim);
 }
@@ -501,6 +680,9 @@ function fmtDate(ms) {
   to {
     transform: rotate(360deg);
   }
+}
+.fab-item .spinning {
+  animation: refresh-spin 0.8s linear infinite;
 }
 .view-toggle {
   display: flex;

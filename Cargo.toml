@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
+futures-util = "0.3"
 # gzip/deflate：部分网盘 CDN（如蓝奏云）不协商直接返回压缩响应，
 # 必须启用解压特性，否则 HTML/JSON 响应为乱码（Go net/http 自动处理，reqwest 需显式开启）
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "cookies", "gzip", "deflate"] }

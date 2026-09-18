@@ -821,6 +821,253 @@ impl Lanzou {
         }
         Ok(location)
     }
+
+    // ---------- 写操作（对齐 Go 版 MakeDir/Rename/Move/Remove/Put） ----------
+
+    /// 写操作前置检查（对齐 Go 版各写方法里的 IsCookie() || IsAccount() 判断）
+    fn require_auth(&self) -> Result<(), String> {
+        if self.is_account() || !self.cookie().is_empty() {
+            Ok(())
+        } else {
+            Err("蓝奏云需要账号密码或 cookie".into())
+        }
+    }
+
+    /// 对齐 MakeDir()：doupload task=2 新建文件夹
+    pub async fn mkdir(&self, parent_fid: &str, name: &str) -> Result<(), String> {
+        self.require_auth()?;
+        self.doupload(
+            &[
+                ("task".into(), "2".into()),
+                ("parent_id".into(), parent_fid.to_string()),
+                ("folder_name".into(), name.to_string()),
+                ("folder_description".into(), String::new()),
+            ],
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 对齐 Rename()：doupload task=46 + type=2 重命名（Go 版仅支持文件）
+    pub async fn rename(&self, _parent_fid: &str, e: &Entry, new_name: &str) -> Result<(), String> {
+        self.require_auth()?;
+        if e.is_dir {
+            return Err("蓝奏云 不支持重命名文件夹操作".into());
+        }
+        self.doupload(
+            &[
+                ("task".into(), "46".into()),
+                ("file_id".into(), e.fid.to_string()),
+                ("file_name".into(), new_name.to_string()),
+                ("type".into(), "2".into()),
+            ],
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 对齐 Move()：doupload task=20 移动文件（Go 版仅支持文件，文件夹返回 NotSupport）
+    pub async fn move_entry(
+        &self,
+        _parent_fid: &str,
+        e: &Entry,
+        dst_dir_fid: &str,
+    ) -> Result<(), String> {
+        self.require_auth()?;
+        if e.is_dir {
+            return Err("蓝奏云 不支持移动文件夹操作".into());
+        }
+        self.doupload(
+            &[
+                ("task".into(), "20".into()),
+                ("folder_id".into(), dst_dir_fid.to_string()),
+                ("file_id".into(), e.fid.to_string()),
+            ],
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// 对齐 Copy()：Go 版蓝奏云驱动没有 Copy 实现
+    pub async fn copy(&self, _parent_fid: &str, _e: &Entry, _dst_dir_fid: &str) -> Result<(), String> {
+        Err("蓝奏云 不支持复制操作".into())
+    }
+
+    /// 对齐 Remove()：doupload task=3 删文件夹 / task=6 删文件
+    pub async fn remove(&self, _parent_fid: &str, e: &Entry) -> Result<(), String> {
+        self.require_auth()?;
+        let form = if e.is_dir {
+            vec![
+                ("task".to_string(), "3".to_string()),
+                ("folder_id".to_string(), e.fid.to_string()),
+            ]
+        } else {
+            vec![
+                ("task".to_string(), "6".to_string()),
+                ("file_id".to_string(), e.fid.to_string()),
+            ]
+        };
+        self.doupload(&form, false).await?;
+        Ok(())
+    }
+
+    /// 对齐 Put()：POST /html5up.php multipart 上传
+    /// 字段对齐 Go 版：task=1, vie=2, ve=2, id=WU_FILE_0, name, folder_id_bb_n
+    /// + 文件域 upload_file（resty SetFileReader，Content-Type 固定 application/octet-stream）
+    ///
+    /// reader 只能读一次，而 acw_sc__v2 验证页可能要求整体重发请求，
+    /// 因此先把完整 multipart body 落临时文件（可重复读、可算 Content-Length，
+    /// 对齐 Go 版 resty 缓冲 body 的行为），结束（含出错路径）时删除。
+    pub async fn put(&self, dst_dir_fid: &str, mut input: super::PutInput) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        self.require_auth()?;
+
+        // 1. 手工构造 multipart/form-data（reqwest 未启用 multipart 特性）
+        let boundary = uuid::Uuid::new_v4().simple().to_string();
+        let mut fields = String::new();
+        for (k, v) in [
+            ("task", "1"),
+            ("vie", "2"),
+            ("ve", "2"),
+            ("id", "WU_FILE_0"),
+            ("name", input.name.as_str()),
+            ("folder_id_bb_n", dst_dir_fid),
+        ] {
+            fields.push_str(&format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+            ));
+        }
+        // 对齐 Go mime/multipart 的 escapeQuotes：仅转义反斜杠与引号
+        let filename = input.name.replace('\\', "\\\\").replace('"', "\\\"");
+        let head = format!(
+            "{fields}--{boundary}\r\nContent-Disposition: form-data; name=\"upload_file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        );
+        let tail = format!("\r\n--{boundary}--\r\n");
+
+        let tmp_path = std::env::temp_dir().join(format!(
+            "openlist-lanzou-{}.part",
+            uuid::Uuid::new_v4()
+        ));
+        let _tmp_guard = TempFileGuard(tmp_path.clone());
+
+        let mut body_file = tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(|e| format!("创建蓝奏云上传临时文件失败: {e}"))?;
+        body_file
+            .write_all(head.as_bytes())
+            .await
+            .map_err(|e| format!("写入蓝奏云上传临时文件失败: {e}"))?;
+        let n = tokio::io::copy(&mut input.reader, &mut body_file)
+            .await
+            .map_err(|e| format!("读取上传内容失败: {e}"))?;
+        body_file
+            .write_all(tail.as_bytes())
+            .await
+            .map_err(|e| format!("写入蓝奏云上传临时文件失败: {e}"))?;
+        body_file
+            .flush()
+            .await
+            .map_err(|e| format!("写入蓝奏云上传临时文件失败: {e}"))?;
+        drop(body_file);
+        let content_length = head.len() as u64 + n + tail.len() as u64;
+
+        // 2. 上传：外层 zt=4 繁忙重试（对齐 _post 的 resty 重试条件），
+        //    内层 acw_sc__v2 验证页重试（对齐 request()），均从临时文件重放 body
+        let url = format!("{BASE_URL}/html5up.php");
+        let mut busy_retries = 0;
+        loop {
+            let mut vs = String::new();
+            let mut last_body = String::new();
+            let mut acw_ok = false;
+            for _ in 0..3 {
+                let file = tokio::fs::File::open(&tmp_path)
+                    .await
+                    .map_err(|e| format!("读取蓝奏云上传临时文件失败: {e}"))?;
+                use tokio_util::io::ReaderStream;
+                let mut req = self
+                    .http
+                    .post(&url)
+                    .header("Referer", "https://pc.woozooo.com")
+                    .header("User-Agent", DEFAULT_UA)
+                    .header(
+                        "Content-Type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .header("Content-Length", content_length.to_string())
+                    .body(reqwest::Body::wrap_stream(ReaderStream::with_capacity(
+                        file,
+                        64 * 1024,
+                    )));
+                // 对齐 request() 的 cookie 逻辑：html5up.php 不含 /file/，不带 down_ip
+                let mut cookie = self.cookie();
+                if !vs.is_empty() {
+                    cookie = if cookie.is_empty() {
+                        format!("acw_sc__v2={vs}")
+                    } else {
+                        format!("{cookie}; acw_sc__v2={vs}")
+                    };
+                }
+                if !cookie.is_empty() {
+                    req = req.header("cookie", cookie);
+                }
+                let resp = req
+                    .send()
+                    .await
+                    .map_err(|e| format!("蓝奏云上传请求失败: {e}"))?;
+                let body_text = resp
+                    .text()
+                    .await
+                    .map_err(|e| format!("读取响应失败: {e}"))?;
+                if body_text.contains("acw_sc__v2") {
+                    vs = calc_acw_sc_v2(&body_text)?;
+                    continue;
+                }
+                last_body = body_text;
+                acw_ok = true;
+                break;
+            }
+            if !acw_ok {
+                return Err("acw_sc__v2 验证失败".into());
+            }
+            // 对齐 _post() 的 zt 判断：1/2/4 成功，9 登录过期，其余取 inf/info 报错
+            let v: Value = serde_json::from_str(&last_body)
+                .map_err(|e| format!("蓝奏云上传响应解析失败: {e}"))?;
+            let zt = v.get("zt").and_then(|x| x.as_i64()).unwrap_or(-1);
+            match zt {
+                1 | 2 => return Ok(()),
+                4 => {
+                    busy_retries += 1;
+                    if busy_retries < 3 {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        continue;
+                    }
+                    return Ok(());
+                }
+                9 => return Err("蓝奏云登录已过期（cookie 失效）".into()),
+                _ => {
+                    let info = v
+                        .get("inf")
+                        .or_else(|| v.get("info"))
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    return Err(format!("蓝奏云接口错误(zt={zt}): {info}"));
+                }
+            }
+        }
+    }
+}
+
+/// 临时文件守卫：drop 时删除（对齐 Go 版 defer os.Remove 语义）
+struct TempFileGuard(std::path::PathBuf);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 #[cfg(test)]

@@ -68,6 +68,7 @@
       :refreshing="refreshing"
       :err="err"
       :driver-labels="DRIVER_LABELS"
+      :can-write="canWrite"
       v-model:view-mode="viewMode"
       @go-accounts="view = 'accounts'"
       @go-home="goHome"
@@ -79,12 +80,87 @@
       @preview="handlePreview"
       @close-preview="closePreview"
       @download="download"
+      @mkdir="fsMkdir"
+      @rename="fsRename"
+      @move="fsMove"
+      @copy="fsCopy"
+      @remove="fsRemove"
+      @upload="fsUpload"
     />
+
+    <!-- 目标目录选择弹窗（移动/复制用） -->
+    <div v-if="picker.open" class="picker-mask" @click.self="picker.open = false">
+      <div class="picker card">
+        <div class="picker-head">
+          <span>{{ picker.mode === 'move' ? '移动到' : '复制到' }}</span>
+          <button class="btn-icon btn-ghost" @click="picker.open = false">
+            <Icon name="close" :size="16" />
+          </button>
+        </div>
+        <nav class="picker-crumbs">
+          <a
+            v-for="(c, i) in picker.crumbs"
+            :key="i"
+            href="#"
+            class="crumb-link"
+            @click.prevent="pickerGoto(i)"
+            >{{ c.name }}</a
+          >
+        </nav>
+        <div class="picker-body">
+          <div v-if="picker.loading" class="picker-state">
+            <span class="spin loader-sm"></span>
+          </div>
+          <div v-else-if="picker.dirs.length === 0" class="picker-state">没有子文件夹</div>
+          <button
+            v-for="d in picker.dirs"
+            :key="d.fid"
+            class="picker-item"
+            @click="pickerEnter(d)"
+          >
+            <Icon name="folder-plus" :size="16" />
+            <span>{{ d.name }}</span>
+          </button>
+        </div>
+        <div class="picker-foot">
+          <button class="btn btn-secondary" @click="picker.open = false">取消</button>
+          <button class="btn" :disabled="picker.busy" @click="pickerConfirm">
+            {{ picker.mode === 'move' ? '移动到此处' : '复制到此处' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 上传任务面板 -->
+    <div v-if="uploads.length" class="upload-panel card">
+      <div class="upload-head">
+        <span>上传任务</span>
+        <button class="btn-icon btn-ghost" title="清除已完成" @click="clearFinishedUploads">
+          <Icon name="close" :size="14" />
+        </button>
+      </div>
+      <div v-for="(t, i) in uploads" :key="i" class="upload-item">
+        <div class="upload-name" :title="t.relPath">
+          <Icon :name="t.status === 'error' ? 'alert' : 'upload'" :size="14" />
+          {{ t.relPath }}
+        </div>
+        <div class="upload-bar">
+          <div
+            class="upload-bar-fill"
+            :class="{ done: t.status === 'done', fail: t.status === 'error' }"
+            :style="{ width: uploadPct(t) + '%' }"
+          ></div>
+        </div>
+        <div class="upload-meta">
+          {{ t.status === 'error' ? t.error : `${fmtSize(t.loaded)} / ${fmtSize(t.size)}` }}
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, reactive, onMounted } from 'vue'
 import Icon from './components/Icon.vue'
 import LoginView from './components/LoginView.vue'
 import AccountsView from './components/AccountsView.vue'
@@ -156,6 +232,8 @@ async function api(path, opts) {
     throw new Error('未登录或会话已过期')
   }
   if (!r.ok) throw new Error(body.message || body.error || r.statusText || `HTTP ${r.status}`)
+  // 兼容层错误：HTTP 200 + {"code":500,"message":...}
+  if (body.code && body.code !== 200) throw new Error(body.message || `错误码 ${body.code}`)
   return body
 }
 
@@ -426,6 +504,215 @@ function closePreview() {
   preview.value = null
 }
 
+// ============================================================
+// 文件写操作（走 OpenList 兼容层 /api/fs/*，path = /账号名/目录/...）
+// ============================================================
+
+// 当前账号是否可写（只读驱动隐藏写操作入口）
+const canWrite = computed(() => {
+  if (!currentId.value) return false
+  const acc = accounts.value.find((a) => a.id === currentId.value)
+  return !!acc && acc.driver !== '123pan_share'
+})
+
+// 当前目录的虚拟路径：第一段为账号名（crumbs[0].name 即账号名）
+function currentPath() {
+  return '/' + crumbs.value.map((c) => c.name).join('/')
+}
+
+function entryPath(e) {
+  return `${currentPath().replace(/\/$/, '')}/${e.name}`
+}
+
+function fsErr(e) {
+  err.value = e.message || String(e)
+}
+
+async function fsMkdir() {
+  const name = prompt('新建文件夹名称：')
+  if (!name?.trim()) return
+  try {
+    await api('/api/fs/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: `${currentPath()}/${name.trim()}` })
+    })
+    await listFiles(crumbs.value[crumbs.value.length - 1].fid, true)
+  } catch (e) {
+    fsErr(e)
+  }
+}
+
+async function fsRename(e) {
+  const name = prompt('重命名为：', e.name)
+  if (!name?.trim() || name.trim() === e.name) return
+  try {
+    await api('/api/fs/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: entryPath(e), name: name.trim() })
+    })
+    await listFiles(crumbs.value[crumbs.value.length - 1].fid, true)
+  } catch (ex) {
+    fsErr(ex)
+  }
+}
+
+async function fsRemove(e) {
+  if (!confirm(`确认删除「${e.name}」？${e.is_dir ? '文件夹内的全部内容将一并删除，' : ''}此操作不可恢复！`)) return
+  try {
+    await api('/api/fs/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dir: currentPath(), names: [e.name] })
+    })
+    await listFiles(crumbs.value[crumbs.value.length - 1].fid, true)
+  } catch (ex) {
+    fsErr(ex)
+  }
+}
+
+// ----- 目标目录选择弹窗（移动/复制共用） -----
+const picker = ref({ open: false, mode: 'move', crumbs: [], dirs: [], loading: false, busy: false, entry: null })
+
+function fsMove(e) {
+  picker.value = { open: true, mode: 'move', crumbs: [{ fid: '0', name: accounts.value.find((a) => a.id === currentId.value)?.name || '' }], dirs: [], loading: false, busy: false, entry: e }
+  pickerLoad('0')
+}
+
+function fsCopy(e) {
+  picker.value = { open: true, mode: 'copy', crumbs: [{ fid: '0', name: accounts.value.find((a) => a.id === currentId.value)?.name || '' }], dirs: [], loading: false, busy: false, entry: e }
+  pickerLoad('0')
+}
+
+async function pickerLoad(fid) {
+  picker.value.loading = true
+  try {
+    const b = await api(`/api/files?account=${encodeURIComponent(currentId.value)}&fid=${encodeURIComponent(fid)}`)
+    picker.value.dirs = (b.entries || []).filter((x) => x.is_dir)
+  } catch (e) {
+    picker.value.dirs = []
+    fsErr(e)
+  } finally {
+    picker.value.loading = false
+  }
+}
+
+function pickerEnter(d) {
+  picker.value.crumbs.push({ fid: d.fid, name: d.name })
+  pickerLoad(d.fid)
+}
+
+function pickerGoto(i) {
+  picker.value.crumbs = picker.value.crumbs.slice(0, i + 1)
+  pickerLoad(picker.value.crumbs[i].fid)
+}
+
+async function pickerConfirm() {
+  const p = picker.value
+  if (p.busy) return
+  const dst = '/' + p.crumbs.map((c) => c.name).join('/')
+  const endpoint = p.mode === 'move' ? '/api/fs/move' : '/api/fs/copy'
+  p.busy = true
+  try {
+    await api(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ src_dir: currentPath(), dst_dir: dst, names: [p.entry.name] })
+    })
+    p.open = false
+    await listFiles(crumbs.value[crumbs.value.length - 1].fid, true)
+  } catch (e) {
+    fsErr(e)
+  } finally {
+    p.busy = false
+  }
+}
+
+// ----- 上传（浏览器 -> /api/fs/form，XHR 自带进度） -----
+const uploads = ref([])
+
+function fmtSize(n) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function uploadPct(t) {
+  if (t.status === 'done') return 100
+  if (!t.size) return t.status === 'uploading' ? 5 : 100
+  return Math.min(99, Math.round((t.loaded / t.size) * 100))
+}
+
+function clearFinishedUploads() {
+  uploads.value = uploads.value.filter((t) => t.status === 'uploading')
+}
+
+// 文件夹上传：相对路径里的中间目录需要先逐级创建（网盘 API 不支持自动建目录）
+async function ensureDirs(relPath) {
+  const segs = relPath.split('/').filter(Boolean)
+  segs.pop() // 最后一段是文件名
+  let cur = currentPath()
+  for (const seg of segs) {
+    cur = `${cur}/${seg}`
+    await api('/api/fs/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: cur })
+    }).catch(() => {}) // 已存在会报错，忽略继续
+  }
+}
+
+function xhrUpload(item, fullPath) {
+  return new Promise((resolve) => {
+    const form = new FormData()
+    form.append('file', item.file)
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/fs/form')
+    // 后端按 Go url.PathUnescape 语义解码 %XX（含 %2F 回 '/'）
+    xhr.setRequestHeader('File-Path', encodeURIComponent(fullPath))
+    xhr.setRequestHeader('X-File-Size', String(item.file.size))
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) item.loaded = ev.loaded
+    }
+    xhr.onload = () => {
+      try {
+        const body = JSON.parse(xhr.responseText || '{}')
+        if (xhr.status === 200 && (!body.code || body.code === 200)) resolve()
+        else reject(new Error(body.message || `HTTP ${xhr.status}`))
+      } catch {
+        reject(new Error(`HTTP ${xhr.status}`))
+      }
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
+}
+
+async function fsUpload(items) {
+  for (const it of items) {
+    const task = reactive({ relPath: it.relPath, size: it.file.size, loaded: 0, status: 'uploading', error: '', file: it.file })
+    uploads.value.push(task)
+    try {
+      await ensureDirs(it.relPath)
+      const fullPath = `${currentPath().replace(/\/$/, '')}/${it.relPath}`
+      await xhrUpload(task, fullPath)
+      task.status = 'done'
+      task.loaded = task.size
+    } catch (e) {
+      task.status = 'error'
+      task.error = e.message || String(e)
+    }
+  }
+  // 全部结束后刷新当前目录
+  if (crumbs.value.length) await listFiles(crumbs.value[crumbs.value.length - 1].fid, true)
+}
+
 onMounted(async () => {
   const saved = localStorage.getItem('ol-theme')
   isDark.value = saved
@@ -542,5 +829,169 @@ onMounted(async () => {
     margin: 0 8px;
     font-size: 13px;
   }
+}
+
+/* 目标目录选择弹窗 */
+.picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.picker {
+  width: min(420px, 100%);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--ol-border);
+}
+.picker-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--ol-border);
+  font-size: 13px;
+}
+.picker-crumbs .crumb-link {
+  color: var(--ol-primary);
+}
+.picker-crumbs .crumb-link + .crumb-link::before {
+  content: '/';
+  color: var(--ol-text-faint);
+  margin-right: 6px;
+}
+.picker-body {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+}
+.picker-state {
+  padding: 30px 0;
+  text-align: center;
+  color: var(--ol-text-dim);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--ol-text);
+  font-size: 13.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.picker-item:hover {
+  background: var(--ol-primary-light);
+  color: var(--ol-primary);
+}
+.picker-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--ol-border);
+}
+.loader-sm {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--ol-border-strong);
+  border-top-color: var(--ol-primary);
+  border-radius: 50%;
+}
+.spin {
+  display: inline-block;
+  animation: spin-rot 0.8s linear infinite;
+}
+@keyframes spin-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 上传任务面板 */
+.upload-panel {
+  position: fixed;
+  right: 28px;
+  bottom: 96px;
+  z-index: 90;
+  width: min(340px, calc(100vw - 40px));
+  max-height: 40vh;
+  overflow: auto;
+  padding: 10px 12px;
+}
+.upload-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 13.5px;
+  margin-bottom: 6px;
+}
+.upload-item {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ol-border);
+}
+.upload-item:last-child {
+  border-bottom: none;
+}
+.upload-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ol-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.upload-bar {
+  height: 4px;
+  margin: 5px 0 4px;
+  background: var(--ol-bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.upload-bar-fill {
+  height: 100%;
+  background: var(--ol-primary);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+.upload-bar-fill.done {
+  background: #2fa96c;
+}
+.upload-bar-fill.fail {
+  background: #e5484d;
+}
+.upload-meta {
+  font-size: 11px;
+  color: var(--ol-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

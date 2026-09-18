@@ -234,6 +234,45 @@ impl Pan123Share {
             local_path: None,
         })
     }
+
+    // ---------- 写操作 ----------
+    // 对齐 Go 版 drivers/123_share：MakeDir/Move/Rename/Copy/Remove/Put
+    // 全部为 errs.NotSupport 占位，此驱动只读，不做任何网络调用。
+
+    /// 对齐 MakeDir()：errs.NotSupport
+    pub async fn mkdir(&self, _parent_fid: &str, _name: &str) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
+
+    /// 对齐 Rename()：errs.NotSupport
+    pub async fn rename(&self, _parent_fid: &str, _e: &Entry, _new_name: &str) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
+
+    /// 对齐 Move()：errs.NotSupport
+    pub async fn move_entry(
+        &self,
+        _parent_fid: &str,
+        _e: &Entry,
+        _dst_dir_fid: &str,
+    ) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
+
+    /// 对齐 Copy()：errs.NotSupport
+    pub async fn copy(&self, _parent_fid: &str, _e: &Entry, _dst_dir_fid: &str) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
+
+    /// 对齐 Remove()：errs.NotSupport
+    pub async fn remove(&self, _parent_fid: &str, _e: &Entry) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
+
+    /// 对齐 Put()：errs.NotSupport
+    pub async fn put(&self, _dst_dir_fid: &str, _input: super::PutInput) -> Result<(), String> {
+        Err("123 分享为只读驱动，不支持此操作".into())
+    }
 }
 
 fn file_to_entry(f: &Value) -> Entry {
