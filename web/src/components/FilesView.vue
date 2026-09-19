@@ -153,7 +153,8 @@
 
       <!-- 统一列表视图：根目录显示网盘列表，进入网盘后显示文件列表 -->
       <div v-else-if="viewMode === 'list'" class="card table-card">
-        <table>
+        <!-- 桌面端：传统表格 -->
+        <table class="desktop-table">
           <thead>
             <tr>
               <th class="col-name">名称</th>
@@ -173,14 +174,14 @@
               <td class="col-name">
                 <a v-if="e.is_dir && !e.is_drive" href="#" class="fname" @click.prevent="$emit('open-dir', e)">
                   <span class="ficon"><FileIcon :name="e.name" :is-dir="true" /></span>
-                  {{ e.name }}
+                  <span class="fname-text">{{ e.name }}</span>
                 </a>
                 <span v-else class="fname">
                   <span class="ficon" :class="{ 'drive-icon': e.is_drive }">
                     <Icon v-if="e.is_drive" name="cloud" :size="19" />
                     <FileIcon v-else :name="e.name" :is-dir="false" />
                   </span>
-                  {{ e.name }}
+                  <span class="fname-text">{{ e.name }}</span>
                   <span v-if="e.is_drive" class="drive-type">{{ driverLabels[e.driver] || e.driver }}</span>
                 </span>
               </td>
@@ -221,6 +222,68 @@
             </tr>
           </tbody>
         </table>
+
+        <!-- 移动端：卡片式列表 -->
+        <ul class="mobile-list">
+          <li
+            v-for="e in displayEntries"
+            :key="e.key"
+            class="mobile-item"
+            :class="{ 'drive-row': e.is_drive }"
+            @click="e.is_drive && $emit('open-account', e.id)"
+          >
+            <!-- 第一行：图标 + 名称 + 大小 + 时间 -->
+            <div class="mobile-row-info">
+              <span class="ficon" :class="{ 'drive-icon': e.is_drive }">
+                <Icon v-if="e.is_drive" name="cloud" :size="20" />
+                <FileIcon v-else :name="e.name" :is-dir="e.is_dir" />
+              </span>
+              <a
+                v-if="e.is_dir && !e.is_drive"
+                href="#"
+                class="mobile-fname"
+                @click.prevent="$emit('open-dir', e)"
+              >{{ e.name }}</a>
+              <span v-else class="mobile-fname">
+                {{ e.name }}
+                <span v-if="e.is_drive" class="drive-type">{{ driverLabels[e.driver] || e.driver }}</span>
+              </span>
+              <span class="mobile-meta">
+                <span>{{ e.is_dir || e.is_drive ? '-' : fmtSize(e.size) }}</span>
+                <span v-if="e.updated_at" class="mobile-date">{{ fmtDate(e.updated_at) }}</span>
+              </span>
+            </div>
+            <!-- 第二行：操作按钮，右对齐 -->
+            <div v-if="!e.is_drive" class="mobile-row-ops">
+              <button
+                v-if="kindOf(e.name, e.is_dir)"
+                class="btn-icon btn-ghost"
+                :title="KIND_TITLE[kindOf(e.name, e.is_dir)]"
+                @click.stop="$emit('preview', e)"
+              >
+                <Icon :name="KIND_ICON[kindOf(e.name, e.is_dir)]" :size="15" />
+              </button>
+              <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="下载" @click.stop="$emit('download', e)">
+                <Icon name="download" :size="15" />
+              </button>
+              <template v-if="canWrite">
+                <button class="btn-icon btn-ghost" title="重命名" @click.stop="$emit('rename', e)">
+                  <Icon name="edit" :size="15" />
+                </button>
+                <button class="btn-icon btn-ghost" title="移动到…" @click.stop="$emit('move', e)">
+                  <Icon name="move" :size="15" />
+                </button>
+                <button v-if="!e.is_dir" class="btn-icon btn-ghost" title="复制到…" @click.stop="$emit('copy', e)">
+                  <Icon name="copy" :size="15" />
+                </button>
+                <button class="btn-icon btn-ghost op-del" title="删除" @click.stop="$emit('remove', e)">
+                  <Icon name="trash" :size="15" />
+                </button>
+              </template>
+              <Icon v-if="e.is_drive" name="chevron-right" :size="16" class="drive-go" />
+            </div>
+          </li>
+        </ul>
       </div>
 
       <!-- 统一宫格视图 -->
@@ -772,9 +835,16 @@ tbody tr:hover {
 .fname {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  overflow-wrap: anywhere;
+  gap: 8px;
   color: var(--ol-text);
+  max-width: 100%;
+  overflow: hidden;
+}
+.fname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
 }
 a.fname:hover {
   color: var(--ol-primary);
@@ -1031,6 +1101,73 @@ a.fname:hover {
   border: 1px solid var(--ol-border);
 }
 
+/* 移动端卡片列表：默认隐藏，移动端显示 */
+.mobile-list {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mobile-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ol-border);
+  gap: 4px;
+}
+.mobile-item:last-child {
+  border-bottom: none;
+}
+.mobile-item.drive-row {
+  cursor: pointer;
+}
+.mobile-item.drive-row:active {
+  background: var(--ol-primary-light);
+}
+/* 第一行：图标 + 文件名 + 大小/时间 */
+.mobile-row-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mobile-fname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ol-text);
+  font-size: 14px;
+}
+a.mobile-fname {
+  color: var(--ol-text);
+}
+a.mobile-fname:hover {
+  color: var(--ol-primary);
+  text-decoration: none;
+}
+.mobile-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--ol-text-dim);
+  white-space: nowrap;
+}
+.mobile-date {
+  color: var(--ol-text-faint);
+}
+/* 第二行：操作按钮右对齐 */
+.mobile-row-ops {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-left: 28px; /* 与图标宽度对齐，视觉缩进 */
+}
+
 @media (max-width: 640px) {
   .page {
     padding: 14px 12px 40px;
@@ -1054,18 +1191,19 @@ a.fname:hover {
     order: 2;
     margin-left: 0;
   }
-  th,
-  td {
-    padding: 10px 10px;
-  }
-  .col-date {
-    display: none;
-  }
-  .col-name {
-    width: auto;
-  }
   .player-pos {
     display: none;
+  }
+  /* 切换：隐藏桌面表格，显示移动端卡片 */
+  .desktop-table {
+    display: none;
+  }
+  .mobile-list {
+    display: block;
+  }
+  .fab-wrap {
+    right: 16px;
+    bottom: 20px;
   }
 }
 </style>
