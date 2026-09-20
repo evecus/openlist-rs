@@ -7,7 +7,7 @@
 
 use super::DownloadInfo;
 use crate::config::{Credential, Entry, Store};
-use md5::{Digest, Md5};
+use md5::Md5;
 use reqwest::{Client, Method};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -41,391 +41,331 @@ impl QuarkOpen {
         api_address: String,
         store: Arc<Store>,
     ) -> Self {
-        QuarkOpen {
-            account_id: account_id.to_string(),
+        Self {
+            account_id: account_id.into(),
             http: Client::new(),
             refresh_token: Mutex::new(refresh_token),
             access_token: Mutex::new(access_token),
             app_id,
             sign_key,
             use_online_api,
-            api_address: if api_address.is_empty() {
-                ONLINE_REFRESH.to_string()
-            } else {
-                api_address
-            },
+            api_address,
             store,
         }
     }
 
-    fn save_tokens(&self, refresh: &str, access: &str) {
-        *self.refresh_token.lock().unwrap() = refresh.to_string();
-        *self.access_token.lock().unwrap() = access.to_string();
-        let (r, a) = (refresh.to_string(), access.to_string());
-        let id = self.account_id.clone();
-        self.store.update_credential(&id, |cred| {
-            if let Credential::QuarkOpen {
-                refresh_token,
-                access_token,
-                ..
-            } = cred
-            {
-                *refresh_token = r.clone();
-                *access_token = a.clone();
-            }
-        });
+    fn persist_tokens(&self) {
+        let rt = self.refresh_token.lock().unwrap().clone();
+        let at = self.access_token.lock().unwrap().clone();
+        let _ = self.store.update_account_credential(
+            &self.account_id,
+            |c| {
+                if let Credential::QuarkOpen {
+                    refresh_token,
+                    access_token,
+                    ..
+                } = c
+                {
+                    *refresh_token = rt.clone();
+                    *access_token = at.clone();
+                }
+            },
+        );
+    }
+
+    async fn refresh(&self) -> Result<(), String> {
+        let rt = self.refresh_token.lock().unwrap().clone();
+        if rt.is_empty() {
+            return Err("refresh_token 为空".into());
+        }
+        let url = if self.use_online_api && !self.api_address.is_empty() {
+            self.api_address.as_str()
+        } else if self.use_online_api {
+            ONLINE_REFRESH
+        } else {
+            return Err("需要配置 online api 或手动提供 access_token".into());
+        };
+        let body = json!({ "refresh_token": rt, "app_id": self.app_id });
+        let res: Value = self
+            .http
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        let at = res
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("refresh 失败: {res}"))?
+            .to_string();
+        if let Some(nrt) = res.get("refresh_token").and_then(|v| v.as_str()) {
+            *self.refresh_token.lock().unwrap() = nrt.to_string();
+        }
+        *self.access_token.lock().unwrap() = at;
+        self.persist_tokens();
+        Ok(())
     }
 
     /// method & pathname & timestamp & signKey -> sha256 hex
-    fn generate_req_sign(&self, method: &str, pathname: &str) -> (String, String, String) {
-        let tm = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            .to_string();
-        let token_data = format!("{method}&{pathname}&{tm}&{}", self.sign_key);
+    fn sign(&self, method: &str, pathname: &str, ts: &str) -> String {
+        let token_data = format!(
+            "{}&{}&{}&{}",
+            method.to_uppercase(),
+            pathname,
+            ts,
+            self.sign_key
+        );
         let hash = Sha256::digest(token_data.as_bytes());
-        let token = hex::encode(hash);
-        let req_id = Uuid::new_v4().to_string();
-        (tm, token, req_id)
-    }
-
-    async fn refresh_token(&self) -> Result<(), String> {
-        let rt = self.refresh_token.lock().unwrap().clone();
-        if !self.use_online_api {
-            return Err("未启用在线刷新且无本地 client 凭证".into());
-        }
-        let url = format!(
-            "{}?refresh_ui={}&server_use=true&driver_txt=quarkyun",
-            self.api_address,
-            url_encode(&rt)
-        );
-        let resp = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("刷新夸克 Open token 失败: {e}"))?;
-        let v: Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("刷新响应解析失败: {e}"))?;
-        let access = v
-            .get("access_token")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        let refresh = v
-            .get("refresh_token")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        if access.is_empty() {
-            let msg = v
-                .get("text")
-                .or_else(|| v.get("message"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("空 token");
-            return Err(format!("刷新夸克 Open token 失败: {msg}"));
-        }
-        self.save_tokens(
-            if refresh.is_empty() { &rt } else { &refresh },
-            &access,
-        );
-        Ok(())
+        hex::encode(hash)
     }
 
     async fn request(
         &self,
         method: Method,
-        pathname: &str,
+        path: &str,
+        query: Option<Vec<(&str, String)>>,
         body: Option<Value>,
-        retried: bool,
+        auth: bool,
     ) -> Result<Value, String> {
-        let (tm, token, req_id) = self.generate_req_sign(method.as_str(), pathname);
-        let access = self.access_token.lock().unwrap().clone();
-        let url = format!("{API}{pathname}");
+        let ts = chrono::Utc::now().timestamp_millis().to_string();
+        let token = self.sign(method.as_str(), path, &ts);
+        let mut url = format!("{API}{path}");
+        if let Some(q) = &query {
+            let qs: Vec<String> = q.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            if !qs.is_empty() {
+                url.push('?');
+                url.push_str(&qs.join("&"));
+            }
+        }
         let mut req = self
             .http
             .request(method.clone(), &url)
-            .header("Accept", "application/json, text/plain, */*")
             .header("User-Agent", UA)
-            .header("x-pan-tm", &tm)
+            .header("x-pan-tm", &ts)
             .header("x-pan-token", &token)
-            .header("x-pan-client-id", &self.app_id)
-            .query(&[("req_id", req_id.as_str()), ("access_token", access.as_str())]);
-        if let Some(b) = &body {
-            req = req.json(b);
+            .header("x-pan-client-id", &self.app_id);
+        if auth {
+            let at = self.access_token.lock().unwrap().clone();
+            if at.is_empty() {
+                self.refresh().await?;
+            }
+            let at = self.access_token.lock().unwrap().clone();
+            req = req.header("Authorization", format!("Bearer {at}"));
         }
-        let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
-        let v: Value = resp.json().await.map_err(|e| format!("响应解析失败: {e}"))?;
-        let status = v.get("status").and_then(|s| s.as_i64()).unwrap_or(0);
-        let errno = v.get("errno").and_then(|e| e.as_i64()).unwrap_or(0);
-        let err_info = v
-            .get("error_info")
-            .or_else(|| v.get("errorInfo"))
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        // token 过期
-        if status == -1
-            && (errno == 11001
-                || (errno == 14001 && err_info.contains("access_token")))
-            && !retried
-        {
-            self.refresh_token().await?;
-            return Box::pin(self.request(method, pathname, body, true)).await;
+        if let Some(b) = body {
+            req = req.json(&b);
         }
-        if status >= 400 || errno != 0 {
-            return Err(if err_info.is_empty() {
-                format!("夸克 Open 接口错误(status={status}, errno={errno})")
-            } else {
-                err_info
-            });
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
+        if !status.is_success() {
+            // token 过期尝试刷新一次
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                self.refresh().await?;
+                return Err(format!("auth failed, refreshed: {v}"));
+            }
+            return Err(format!("HTTP {status}: {v}"));
+        }
+        // 业务 code
+        if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
+            if code != 0 {
+                return Err(format!(
+                    "api code={code}: {}",
+                    v.get("message").and_then(|m| m.as_str()).unwrap_or("")
+                ));
+            }
         }
         Ok(v)
     }
 
     pub async fn validate(&self) -> Result<(), String> {
-        if self.refresh_token.lock().unwrap().is_empty() {
-            return Err("refresh_token 不能为空".into());
-        }
-        if self.app_id.is_empty() || self.sign_key.is_empty() {
-            return Err("app_id 与 sign_key 不能为空".into());
+        if self.refresh_token.lock().unwrap().is_empty() && self.access_token.lock().unwrap().is_empty()
+        {
+            return Err("refresh_token 或 access_token 需要一个".into());
         }
         if self.access_token.lock().unwrap().is_empty() {
-            self.refresh_token().await?;
+            self.refresh().await?;
         }
-        // 探测 list 根
-        let _ = self
-            .request(
-                Method::POST,
-                "/open/v1/file/list",
-                Some(json!({
-                    "parent_fid": "0",
-                    "size": 1,
-                    "sort": "file_name:asc",
-                })),
-                false,
-            )
-            .await?;
+        // 用列根目录验证
+        let _ = self.list("0").await?;
         Ok(())
     }
 
     pub async fn list(&self, parent_fid: &str) -> Result<Vec<Entry>, String> {
-        let parent = if parent_fid.is_empty() {
-            "0"
-        } else {
-            parent_fid
-        };
-        let mut files = Vec::new();
-        let mut cursor: Option<Value> = None;
+        let mut out = Vec::new();
+        let mut page = 1u32;
         loop {
-            let mut body = json!({
-                "parent_fid": parent,
-                "size": 100,
-                "sort": "file_name:asc",
+            let body = json!({
+                "pdir_fid": parent_fid,
+                "_page": page,
+                "_size": 100,
             });
-            if let Some(c) = &cursor {
-                body["query_cursor"] = c.clone();
-            }
-            let resp = self
-                .request(Method::POST, "/open/v1/file/list", Some(body), false)
-                .await?;
-            let list = resp
-                .pointer("/data/file_list")
-                .or_else(|| resp.pointer("/data/list"))
+            let res = self
+                .request(
+                    Method::POST,
+                    "/open/v1/file/list",
+                    None,
+                    Some(body),
+                    true,
+                )
+                .await;
+            let res = match res {
+                Ok(v) => v,
+                Err(e) if e.contains("auth failed") => {
+                    self.request(
+                        Method::POST,
+                        "/open/v1/file/list",
+                        None,
+                        Some(json!({
+                            "pdir_fid": parent_fid,
+                            "_page": page,
+                            "_size": 100,
+                        })),
+                        true,
+                    )
+                    .await?
+                }
+                Err(e) => return Err(e),
+            };
+            let data = res.get("data").cloned().unwrap_or(Value::Null);
+            let list = data
+                .get("list")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            for f in &list {
-                let is_dir = f
-                    .get("dir")
-                    .or_else(|| f.get("file"))
-                    .map(|v| {
-                        if let Some(b) = v.as_bool() {
-                            // dir=true 或 file=false
-                            if f.get("dir").is_some() {
-                                b
-                            } else {
-                                !b
-                            }
-                        } else {
-                            f.get("file_type")
-                                .and_then(|t| t.as_i64())
-                                .map(|t| t == 0)
-                                .unwrap_or(false)
-                        }
-                    })
-                    .unwrap_or(false);
-                files.push(Entry {
-                    fid: f
-                        .get("fid")
-                        .or_else(|| f.get("file_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    name: f
-                        .get("file_name")
-                        .or_else(|| f.get("name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    size: f.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
-                    is_dir,
-                    updated_at: f
-                        .get("updated_at")
-                        .and_then(|v| v.as_i64())
-                        .or_else(|| {
-                            f.get("l_updated_at").and_then(|v| v.as_i64())
-                        }),
-                    etag: None,
-                    s3_key_flag: None,
-                    file_type: None,
-                    extra: None,
-                });
-            }
-            cursor = resp
-                .pointer("/data/query_cursor")
-                .cloned()
-                .filter(|c| !c.is_null());
-            let has_more = resp
-                .pointer("/data/has_more")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            if !has_more || list.is_empty() {
+            if list.is_empty() {
                 break;
             }
+            for item in list {
+                let fid = item
+                    .get("fid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = item
+                    .get("file_name")
+                    .or_else(|| item.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_dir = item
+                    .get("dir")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || item.get("file_type").and_then(|v| v.as_i64()) == Some(0);
+                let size = item.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+                let modified = item
+                    .get("updated_at")
+                    .or_else(|| item.get("l_updated_at"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                out.push(Entry {
+                    name,
+                    path: fid.clone(),
+                    is_dir,
+                    size,
+                    modified,
+                    id: Some(fid),
+                    hash: None,
+                });
+            }
+            let total = data.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            if (out.len() as u64) >= total || page >= 100 {
+                break;
+            }
+            page += 1;
         }
-        Ok(files)
+        Ok(out)
     }
 
     pub async fn download(&self, e: &Entry) -> Result<DownloadInfo, String> {
-        if e.is_dir {
-            return Err("目录无法下载".into());
-        }
-        let (tm, token, req_id) = self.generate_req_sign("GET", "/open/v1/file/download");
-        let access = self.access_token.lock().unwrap().clone();
-        let url = format!("{API}/open/v1/file/download");
-        let resp = self
-            .http
-            .get(&url)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("User-Agent", UA)
-            .header("x-pan-tm", &tm)
-            .header("x-pan-token", &token)
-            .header("x-pan-client-id", &self.app_id)
-            .query(&[
-                ("req_id", req_id.as_str()),
-                ("access_token", access.as_str()),
-                ("fid", e.fid.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|e| format!("请求失败: {e}"))?;
-        let v: Value = resp.json().await.map_err(|e| format!("响应解析失败: {e}"))?;
-        let status = v.get("status").and_then(|s| s.as_i64()).unwrap_or(0);
-        let errno = v.get("errno").and_then(|e| e.as_i64()).unwrap_or(0);
-        if status >= 400 || errno != 0 {
-            let msg = v
-                .get("error_info")
-                .and_then(|x| x.as_str())
-                .unwrap_or("unknown");
-            return Err(format!("夸克 Open 下载失败: {msg}"));
-        }
-        let dl = v
-            .pointer("/data/download_url")
-            .or_else(|| v.pointer("/data/url"))
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        if dl.is_empty() {
-            // 有些版本 data 是数组
-            let dl = v
-                .pointer("/data/0/download_url")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string();
-            if dl.is_empty() {
-                return Err("夸克 Open 未返回下载直链".into());
+        let fid = e.id.as_deref().unwrap_or(&e.path);
+        let res = self
+            .request(
+                Method::GET,
+                "/open/v1/file/download",
+                Some(vec![("fids", fid.to_string())]),
+                None,
+                true,
+            )
+            .await;
+        let res = match res {
+            Ok(v) => v,
+            Err(e) if e.contains("auth failed") => {
+                self.request(
+                    Method::GET,
+                    "/open/v1/file/download",
+                    Some(vec![("fids", fid.to_string())]),
+                    None,
+                    true,
+                )
+                .await?
             }
-            return Ok(DownloadInfo {
-                url: dl,
-                headers: vec![],
-                proxy: true,
-                local_path: None,
-            });
-        }
+            Err(e) => return Err(e),
+        };
+        let data = res.get("data").cloned().unwrap_or(Value::Null);
+        let arr = data.as_array().cloned().unwrap_or_else(|| {
+            if data.is_object() {
+                vec![data]
+            } else {
+                vec![]
+            }
+        });
+        let first = arr.first().ok_or("无下载地址".to_string())?;
+        let url = first
+            .get("download_url")
+            .or_else(|| first.get("url"))
+            .and_then(|v| v.as_str())
+            .ok_or("无 download_url")?
+            .to_string();
         Ok(DownloadInfo {
-            url: dl,
+            url,
             headers: vec![],
-            proxy: true,
-            local_path: None,
+            filename: Some(e.name.clone()),
+            size: if e.size > 0 { Some(e.size) } else { None },
         })
     }
 
     pub async fn mkdir(&self, parent_fid: &str, name: &str) -> Result<(), String> {
-        let body = json!({
-            "parent_fid": parent_fid,
-            "file_name": name,
-            "dir": true,
-        });
-        self.request(Method::POST, "/open/v1/file/create", Some(body), false)
+        let body = json!({ "pdir_fid": parent_fid, "file_name": name });
+        self.request(Method::POST, "/open/v1/file/create", None, Some(body), true)
             .await?;
         Ok(())
     }
 
-    pub async fn rename(&self, _p: &str, e: &Entry, new_name: &str) -> Result<(), String> {
-        let body = json!({
-            "fid": e.fid,
-            "file_name": new_name,
-        });
-        self.request(Method::POST, "/open/v1/file/rename", Some(body), false)
+    pub async fn rename(&self, _parent: &str, e: &Entry, new_name: &str) -> Result<(), String> {
+        let fid = e.id.as_deref().unwrap_or(&e.path);
+        let body = json!({ "fid": fid, "file_name": new_name });
+        self.request(Method::POST, "/open/v1/file/rename", None, Some(body), true)
             .await?;
         Ok(())
     }
 
     pub async fn move_entry(&self, _p: &str, e: &Entry, dst: &str) -> Result<(), String> {
-        let body = json!({
-            "filelist": [e.fid],
-            "to_pdir_fid": dst,
-        });
-        self.request(Method::POST, "/open/v1/file/move", Some(body), false)
+        let fid = e.id.as_deref().unwrap_or(&e.path);
+        let body = json!({ "filelist": [{"fid": fid}], "to_pdir_fid": dst });
+        self.request(Method::POST, "/open/v1/file/move", None, Some(body), true)
             .await?;
         Ok(())
-    }
-
-    pub async fn copy(&self, _p: &str, _e: &Entry, _d: &str) -> Result<(), String> {
-        Err("夸克 Open 不支持复制".into())
     }
 
     pub async fn remove(&self, _p: &str, e: &Entry) -> Result<(), String> {
-        let body = json!({ "filelist": [e.fid] });
-        self.request(Method::POST, "/open/v1/file/delete", Some(body), false)
+        let fid = e.id.as_deref().unwrap_or(&e.path);
+        let body = json!({ "filelist": [{"fid": fid}] });
+        self.request(Method::POST, "/open/v1/file/delete", None, Some(body), true)
             .await?;
         Ok(())
     }
 
-    pub async fn put(&self, _d: &str, _input: super::PutInput) -> Result<(), String> {
-        Err("夸克 Open 上传暂未实现".into())
+    pub async fn put(&self, _dir: &str, _input: super::PutInput) -> Result<(), String> {
+        Err("quark_open 暂不支持上传".into())
     }
 }
 
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-// silence unused import warnings for md5 used potentially later
-#[allow(dead_code)]
 fn _md5_hex(s: &str) -> String {
     hex::encode(Md5::digest(s.as_bytes()))
 }
