@@ -200,17 +200,8 @@ fn split_path(path: &str) -> Vec<String> {
 }
 
 fn build_tree(text: &str) -> Result<Node, String> {
-    let mut root = Node {
-        url: String::new(),
-        name: "root".into(),
-        level: -1,
-        modified: 0,
-        size: 0,
-        children: Vec::new(),
-    };
     // 用索引栈模拟：存当前路径上各层在 children 中的位置
     // 简化：用递归结构，直接维护 stack of mutable indices via parent list
-    let mut stack_levels: Vec<i32> = vec![-1];
     // nodes stored as path of indices from root
     // 用 flatten 方式：每次找到父节点后 append
     // 为简单起见用指针模拟：Vec 持有所有节点，用索引引用
@@ -227,7 +218,14 @@ fn build_tree(text: &str) -> Result<Node, String> {
     }
     let mut frames: Vec<Frame> = vec![Frame {
         level: -1,
-        node: root,
+        node: Node {
+            url: String::new(),
+            name: "root".into(),
+            level: -1,
+            modified: 0,
+            size: 0,
+            children: Vec::new(),
+        },
     }];
 
     for line in text.lines() {

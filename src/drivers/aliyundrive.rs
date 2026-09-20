@@ -136,19 +136,21 @@ impl Aliyundrive {
         if self.access_token.lock().unwrap().is_empty() {
             self.refresh().await?;
         }
-        let res = self
+        let res = match self
             .request(Method::POST, "/v2/user/get", None, false)
             .await
-            .or_else(|_| async {
+        {
+            Ok(v) => v,
+            Err(_) => {
                 self.request(
                     Method::POST,
                     "/adrive/v1.0/user/getDriveInfo",
                     None,
                     false,
                 )
-                .await
-            })
-            .await?;
+                .await?
+            }
+        };
         let drive_id = res
             .get("default_drive_id")
             .or_else(|| res.get("resource_drive_id"))

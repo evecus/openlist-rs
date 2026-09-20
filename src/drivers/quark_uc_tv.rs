@@ -9,7 +9,7 @@ use crate::config::{Credential, Entry, Store};
 use md5::{Digest, Md5};
 use reqwest::{Client, Method};
 use serde_json::{json, Value};
-use sha2::{Digest as Sha2Digest, Sha256};
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy)]
