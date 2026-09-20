@@ -275,14 +275,13 @@ pub(crate) struct AddAccountReq {
     #[serde(default)]
     device_id: Option<String>,
     // 115 share / 123 link / aliyun share / quark open
+    // share_pwd 已在上方 123pan_share 段声明，勿重复
     #[serde(default)]
     share_code: Option<String>,
     #[serde(default)]
     receive_code: Option<String>,
     #[serde(default)]
     share_id: Option<String>,
-    #[serde(default)]
-    share_pwd: Option<String>,
     #[serde(default)]
     origin_urls: Option<String>,
     #[serde(default)]
@@ -372,7 +371,8 @@ pub(crate) async fn add_account(
                 },
             )
         }
-        "aliyundrive_open" | "aliyundrive" | "aliyun" => (
+        // 旧版 "aliyundrive" 走下方独立分支；开放平台仅匹配 open / aliyun 别名
+        "aliyundrive_open" | "aliyun" => (
             "aliyundrive_open",
             Credential::AliyundriveOpen {
                 refresh_token: refresh.ok_or((
@@ -1596,7 +1596,8 @@ pub(crate) async fn edit_account(
                 },
             )
         }
-        "aliyundrive_open" | "aliyundrive" | "aliyun" => (
+        // 旧版 "aliyundrive" 走下方独立分支；开放平台仅匹配 open / aliyun 别名
+        "aliyundrive_open" | "aliyun" => (
             "aliyundrive_open",
             Credential::AliyundriveOpen {
                 refresh_token: refresh.ok_or((
