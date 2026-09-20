@@ -262,6 +262,93 @@ pub enum Credential {
         #[serde(default)]
         client_secret: String,
     },
+    /// 115 Open（开放平台 access/refresh token）
+    Pan115Open {
+        access_token: String,
+        refresh_token: String,
+    },
+    /// 115 分享（只读）
+    Pan115Share {
+        #[serde(default)]
+        cookie: String,
+        share_code: String,
+        #[serde(default)]
+        receive_code: String,
+    },
+    /// 123 Open（开放平台）
+    Pan123Open {
+        #[serde(default)]
+        client_id: String,
+        #[serde(default)]
+        client_secret: String,
+        #[serde(default)]
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+        #[serde(default = "default_true")]
+        use_online_api: bool,
+        #[serde(default)]
+        api_address: String,
+    },
+    /// 123PanLink（离线直链树，只读）
+    Pan123Link {
+        origin_urls: String,
+        #[serde(default)]
+        private_key: String,
+        #[serde(default)]
+        uid: u64,
+        #[serde(default = "default_123link_duration")]
+        valid_duration: i64,
+    },
+    /// 阿里云盘旧版（已废弃，建议 aliyundrive_open）
+    Aliyundrive {
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+    },
+    /// 阿里云盘分享（只读）
+    AliyundriveShare {
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+        share_id: String,
+        #[serde(default)]
+        share_pwd: String,
+    },
+    /// 夸克开放平台
+    QuarkOpen {
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+        app_id: String,
+        sign_key: String,
+        #[serde(default = "default_true")]
+        use_online_api: bool,
+        #[serde(default)]
+        api_address: String,
+    },
+    /// 夸克 TV（只读）
+    QuarkTv {
+        #[serde(default)]
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+        #[serde(default)]
+        device_id: String,
+        #[serde(default = "default_link_method")]
+        link_method: String,
+    },
+    /// UC TV（只读）
+    UcTv {
+        #[serde(default)]
+        refresh_token: String,
+        #[serde(default)]
+        access_token: String,
+        #[serde(default)]
+        device_id: String,
+        #[serde(default = "default_link_method")]
+        link_method: String,
+    },
 
 }
 
@@ -292,6 +379,8 @@ fn default_onedrive_root() -> String {
 fn default_s3_region() -> String { "us-east-1".to_string() }
 fn default_gh_per_page() -> u32 { 30 }
 fn default_true() -> bool { true }
+fn default_123link_duration() -> i64 { 30 }
+fn default_link_method() -> String { "download".to_string() }
 fn default_s3_expire() -> u64 { 4 }
 fn default_s3_root() -> String { "/".to_string() }
 fn default_sftp_root() -> String { "/".to_string() }

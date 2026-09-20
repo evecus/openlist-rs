@@ -151,6 +151,15 @@ pub(crate) async fn list_accounts(State(st): State<AppState>) -> Json<Value> {
                 Credential::OnedriveShare { .. } => "onedrive_share".into(),
                 Credential::Dropbox { .. } => "dropbox".into(),
                 Credential::GooglePhoto { .. } => "google_photo".into(),
+                Credential::Pan115Open { .. } => "pan115_open".into(),
+                Credential::Pan115Share { .. } => "pan115_share".into(),
+                Credential::Pan123Open { .. } => "pan123_open".into(),
+                Credential::Pan123Link { .. } => "pan123_link".into(),
+                Credential::Aliyundrive { .. } => "aliyundrive".into(),
+                Credential::AliyundriveShare { .. } => "aliyundrive_share".into(),
+                Credential::QuarkOpen { .. } => "quark_open".into(),
+                Credential::QuarkTv { .. } => "quark_tv".into(),
+                Credential::UcTv { .. } => "uc_tv".into(),
             },
             server_proxy: a.server_proxy,
         })
@@ -265,6 +274,29 @@ pub(crate) struct AddAccountReq {
     use_online_api: Option<bool>,
     #[serde(default)]
     device_id: Option<String>,
+    // 115 share / 123 link / aliyun share / quark open
+    #[serde(default)]
+    share_code: Option<String>,
+    #[serde(default)]
+    receive_code: Option<String>,
+    #[serde(default)]
+    share_id: Option<String>,
+    #[serde(default)]
+    share_pwd: Option<String>,
+    #[serde(default)]
+    origin_urls: Option<String>,
+    #[serde(default)]
+    uid: Option<u64>,
+    #[serde(default)]
+    valid_duration: Option<i64>,
+    #[serde(default)]
+    app_id: Option<String>,
+    #[serde(default)]
+    sign_key: Option<String>,
+    #[serde(default)]
+    api_address: Option<String>,
+    #[serde(default)]
+    link_method: Option<String>,
 
     /// 服务器代理开关（默认 false = 直链 302）
     #[serde(default)]
@@ -646,6 +678,95 @@ pub(crate) async fn add_account(
                 client_secret: req.client_secret.clone().unwrap_or_default(),
             })
         }
+        "pan115_open" | "115_open" => {
+            let access_token = req.access_token.clone().unwrap_or_default();
+            let refresh_token = req.refresh_token.clone().unwrap_or_default();
+            if access_token.is_empty() && refresh_token.is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "115 Open 需要 access_token 或 refresh_token".into()));
+            }
+            ("pan115_open", Credential::Pan115Open { access_token, refresh_token })
+        }
+        "pan115_share" | "115_share" => {
+            let share_code = req.share_code.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "115 分享需要 share_code".to_string()))?;
+            ("pan115_share", Credential::Pan115Share {
+                cookie: req.cookie.clone().unwrap_or_default(),
+                share_code: share_code.to_string(),
+                receive_code: req.receive_code.clone().unwrap_or_default(),
+            })
+        }
+        "pan123_open" | "123_open" => {
+            ("pan123_open", Credential::Pan123Open {
+                client_id: req.client_id.clone().unwrap_or_default(),
+                client_secret: req.client_secret.clone().unwrap_or_default(),
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                use_online_api: req.use_online_api.unwrap_or(true),
+                api_address: req.api_address.clone().unwrap_or_default(),
+            })
+        }
+        "pan123_link" | "123_link" => {
+            let origin_urls = req.origin_urls.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "123PanLink 需要 origin_urls".to_string()))?;
+            ("pan123_link", Credential::Pan123Link {
+                origin_urls: origin_urls.to_string(),
+                private_key: req.private_key.clone().unwrap_or_default(),
+                uid: req.uid.unwrap_or(0),
+                valid_duration: req.valid_duration.unwrap_or(30),
+            })
+        }
+        "aliyundrive" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里云盘(旧)需要 refresh_token".to_string()))?;
+            ("aliyundrive", Credential::Aliyundrive {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+            })
+        }
+        "aliyundrive_share" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里分享需要 refresh_token".to_string()))?;
+            let share_id = req.share_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里分享需要 share_id".to_string()))?;
+            ("aliyundrive_share", Credential::AliyundriveShare {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                share_id: share_id.to_string(),
+                share_pwd: req.share_pwd.clone().unwrap_or_default(),
+            })
+        }
+        "quark_open" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 refresh_token".to_string()))?;
+            let app_id = req.app_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 app_id".to_string()))?;
+            let sign_key = req.sign_key.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 sign_key".to_string()))?;
+            ("quark_open", Credential::QuarkOpen {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                app_id: app_id.to_string(),
+                sign_key: sign_key.to_string(),
+                use_online_api: req.use_online_api.unwrap_or(true),
+                api_address: req.api_address.clone().unwrap_or_default(),
+            })
+        }
+        "quark_tv" => {
+            ("quark_tv", Credential::QuarkTv {
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                device_id: req.device_id.clone().unwrap_or_default(),
+                link_method: req.link_method.clone().unwrap_or_else(|| "download".into()),
+            })
+        }
+        "uc_tv" => {
+            ("uc_tv", Credential::UcTv {
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                device_id: req.device_id.clone().unwrap_or_default(),
+                link_method: req.link_method.clone().unwrap_or_else(|| "download".into()),
+            })
+        }
         other => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -894,6 +1015,68 @@ pub(crate) async fn get_account_secret(
             out["access_token"] = json!(access_token);
             out["client_id"] = json!(client_id);
             out["client_secret"] = json!(client_secret);
+        }
+        Credential::Pan115Open { access_token, refresh_token } => {
+            out["driver"] = json!("pan115_open");
+            out["access_token"] = json!(access_token);
+            out["refresh_token"] = json!(refresh_token);
+        }
+        Credential::Pan115Share { cookie, share_code, receive_code } => {
+            out["driver"] = json!("pan115_share");
+            out["cookie"] = json!(cookie);
+            out["share_code"] = json!(share_code);
+            out["receive_code"] = json!(receive_code);
+        }
+        Credential::Pan123Open { client_id, client_secret, refresh_token, access_token, use_online_api, api_address } => {
+            out["driver"] = json!("pan123_open");
+            out["client_id"] = json!(client_id);
+            out["client_secret"] = json!(client_secret);
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+            out["use_online_api"] = json!(use_online_api);
+            out["api_address"] = json!(api_address);
+        }
+        Credential::Pan123Link { origin_urls, private_key, uid, valid_duration } => {
+            out["driver"] = json!("pan123_link");
+            out["origin_urls"] = json!(origin_urls);
+            out["private_key"] = json!(private_key);
+            out["uid"] = json!(uid);
+            out["valid_duration"] = json!(valid_duration);
+        }
+        Credential::Aliyundrive { refresh_token, access_token } => {
+            out["driver"] = json!("aliyundrive");
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+        }
+        Credential::AliyundriveShare { refresh_token, access_token, share_id, share_pwd } => {
+            out["driver"] = json!("aliyundrive_share");
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+            out["share_id"] = json!(share_id);
+            out["share_pwd"] = json!(share_pwd);
+        }
+        Credential::QuarkOpen { refresh_token, access_token, app_id, sign_key, use_online_api, api_address } => {
+            out["driver"] = json!("quark_open");
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+            out["app_id"] = json!(app_id);
+            out["sign_key"] = json!(sign_key);
+            out["use_online_api"] = json!(use_online_api);
+            out["api_address"] = json!(api_address);
+        }
+        Credential::QuarkTv { refresh_token, access_token, device_id, link_method } => {
+            out["driver"] = json!("quark_tv");
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+            out["device_id"] = json!(device_id);
+            out["link_method"] = json!(link_method);
+        }
+        Credential::UcTv { refresh_token, access_token, device_id, link_method } => {
+            out["driver"] = json!("uc_tv");
+            out["refresh_token"] = json!(refresh_token);
+            out["access_token"] = json!(access_token);
+            out["device_id"] = json!(device_id);
+            out["link_method"] = json!(link_method);
         }
     }
 
@@ -1717,6 +1900,95 @@ pub(crate) async fn edit_account(
                 access_token: req.access_token.clone().unwrap_or_default(),
                 client_id: req.client_id.clone().unwrap_or_default(),
                 client_secret: req.client_secret.clone().unwrap_or_default(),
+            })
+        }
+        "pan115_open" | "115_open" => {
+            let access_token = req.access_token.clone().unwrap_or_default();
+            let refresh_token = req.refresh_token.clone().unwrap_or_default();
+            if access_token.is_empty() && refresh_token.is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "115 Open 需要 access_token 或 refresh_token".into()));
+            }
+            ("pan115_open", Credential::Pan115Open { access_token, refresh_token })
+        }
+        "pan115_share" | "115_share" => {
+            let share_code = req.share_code.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "115 分享需要 share_code".to_string()))?;
+            ("pan115_share", Credential::Pan115Share {
+                cookie: req.cookie.clone().unwrap_or_default(),
+                share_code: share_code.to_string(),
+                receive_code: req.receive_code.clone().unwrap_or_default(),
+            })
+        }
+        "pan123_open" | "123_open" => {
+            ("pan123_open", Credential::Pan123Open {
+                client_id: req.client_id.clone().unwrap_or_default(),
+                client_secret: req.client_secret.clone().unwrap_or_default(),
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                use_online_api: req.use_online_api.unwrap_or(true),
+                api_address: req.api_address.clone().unwrap_or_default(),
+            })
+        }
+        "pan123_link" | "123_link" => {
+            let origin_urls = req.origin_urls.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "123PanLink 需要 origin_urls".to_string()))?;
+            ("pan123_link", Credential::Pan123Link {
+                origin_urls: origin_urls.to_string(),
+                private_key: req.private_key.clone().unwrap_or_default(),
+                uid: req.uid.unwrap_or(0),
+                valid_duration: req.valid_duration.unwrap_or(30),
+            })
+        }
+        "aliyundrive" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里云盘(旧)需要 refresh_token".to_string()))?;
+            ("aliyundrive", Credential::Aliyundrive {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+            })
+        }
+        "aliyundrive_share" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里分享需要 refresh_token".to_string()))?;
+            let share_id = req.share_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "阿里分享需要 share_id".to_string()))?;
+            ("aliyundrive_share", Credential::AliyundriveShare {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                share_id: share_id.to_string(),
+                share_pwd: req.share_pwd.clone().unwrap_or_default(),
+            })
+        }
+        "quark_open" => {
+            let refresh_token = req.refresh_token.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 refresh_token".to_string()))?;
+            let app_id = req.app_id.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 app_id".to_string()))?;
+            let sign_key = req.sign_key.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or((StatusCode::BAD_REQUEST, "夸克 Open 需要 sign_key".to_string()))?;
+            ("quark_open", Credential::QuarkOpen {
+                refresh_token: refresh_token.to_string(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                app_id: app_id.to_string(),
+                sign_key: sign_key.to_string(),
+                use_online_api: req.use_online_api.unwrap_or(true),
+                api_address: req.api_address.clone().unwrap_or_default(),
+            })
+        }
+        "quark_tv" => {
+            ("quark_tv", Credential::QuarkTv {
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                device_id: req.device_id.clone().unwrap_or_default(),
+                link_method: req.link_method.clone().unwrap_or_else(|| "download".into()),
+            })
+        }
+        "uc_tv" => {
+            ("uc_tv", Credential::UcTv {
+                refresh_token: req.refresh_token.clone().unwrap_or_default(),
+                access_token: req.access_token.clone().unwrap_or_default(),
+                device_id: req.device_id.clone().unwrap_or_default(),
+                link_method: req.link_method.clone().unwrap_or_else(|| "download".into()),
             })
         }
         other => {
