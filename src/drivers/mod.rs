@@ -23,6 +23,14 @@ pub mod pikpak;
 pub mod onedrive_share;
 pub mod dropbox;
 pub mod google_photo;
+pub mod pan115_open;
+pub mod pan115_share;
+pub mod pan123_open;
+pub mod link123;
+pub mod aliyundrive;
+pub mod aliyundrive_share;
+pub mod quark_open;
+pub mod quark_uc_tv;
 
 use crate::config::{Credential, Entry, Store};
 use std::pin::Pin;
@@ -106,6 +114,15 @@ pub enum Driver {
     OnedriveShare(onedrive_share::OnedriveShare),
     Dropbox(dropbox::Dropbox),
     GooglePhoto(google_photo::GooglePhoto),
+    Pan115Open(pan115_open::Pan115Open),
+    Pan115Share(pan115_share::Pan115Share),
+    Pan123Open(pan123_open::Pan123Open),
+    Pan123Link(link123::Pan123Link),
+    Aliyundrive(aliyundrive::Aliyundrive),
+    AliyundriveShare(aliyundrive_share::AliyundriveShare),
+    QuarkOpen(quark_open::QuarkOpen),
+    QuarkTv(quark_uc_tv::QuarkUcTv),
+    UcTv(quark_uc_tv::QuarkUcTv),
 }
 
 impl Driver {
@@ -390,6 +407,116 @@ impl Driver {
                 client_secret.clone(),
                 store.clone(),
             )),
+            Credential::Pan115Open {
+                access_token,
+                refresh_token,
+            } => Driver::Pan115Open(pan115_open::Pan115Open::new(
+                id,
+                access_token.clone(),
+                refresh_token.clone(),
+                store.clone(),
+            )),
+            Credential::Pan115Share {
+                cookie,
+                share_code,
+                receive_code,
+            } => Driver::Pan115Share(pan115_share::Pan115Share::new(
+                cookie.clone(),
+                share_code.clone(),
+                receive_code.clone(),
+            )),
+            Credential::Pan123Open {
+                client_id,
+                client_secret,
+                refresh_token,
+                access_token,
+                use_online_api,
+                api_address,
+            } => Driver::Pan123Open(pan123_open::Pan123Open::new(
+                id,
+                client_id.clone(),
+                client_secret.clone(),
+                refresh_token.clone(),
+                access_token.clone(),
+                *use_online_api,
+                api_address.clone(),
+                store.clone(),
+            )),
+            Credential::Pan123Link {
+                origin_urls,
+                private_key,
+                uid,
+                valid_duration,
+            } => Driver::Pan123Link(link123::Pan123Link::new(
+                origin_urls.clone(),
+                private_key.clone(),
+                *uid,
+                *valid_duration,
+            )?),
+            Credential::Aliyundrive {
+                refresh_token,
+                access_token,
+            } => Driver::Aliyundrive(aliyundrive::Aliyundrive::new(
+                id,
+                refresh_token.clone(),
+                access_token.clone(),
+                store.clone(),
+            )),
+            Credential::AliyundriveShare {
+                refresh_token,
+                share_id,
+                share_pwd,
+                ..
+            } => Driver::AliyundriveShare(aliyundrive_share::AliyundriveShare::new(
+                id,
+                refresh_token.clone(),
+                share_id.clone(),
+                share_pwd.clone(),
+                store.clone(),
+            )),
+            Credential::QuarkOpen {
+                refresh_token,
+                access_token,
+                app_id,
+                sign_key,
+                use_online_api,
+                api_address,
+            } => Driver::QuarkOpen(quark_open::QuarkOpen::new(
+                id,
+                refresh_token.clone(),
+                access_token.clone(),
+                app_id.clone(),
+                sign_key.clone(),
+                *use_online_api,
+                api_address.clone(),
+                store.clone(),
+            )),
+            Credential::QuarkTv {
+                refresh_token,
+                access_token,
+                device_id,
+                link_method,
+            } => Driver::QuarkTv(quark_uc_tv::QuarkUcTv::new_quark_tv(
+                id,
+                refresh_token.clone(),
+                access_token.clone(),
+                device_id.clone(),
+                link_method.clone(),
+                store.clone(),
+            )),
+            Credential::UcTv {
+                refresh_token,
+                access_token,
+                device_id,
+                link_method,
+            } => Driver::UcTv(quark_uc_tv::QuarkUcTv::new_uc_tv(
+                id,
+                refresh_token.clone(),
+                access_token.clone(),
+                device_id.clone(),
+                link_method.clone(),
+                store.clone(),
+            )),
         };
         // 统一验证凭据（对齐各驱动 Init()）
         match &d {
@@ -418,6 +545,15 @@ impl Driver {
             Driver::OnedriveShare(x) => x.validate().await?,
             Driver::Dropbox(x) => x.validate().await?,
             Driver::GooglePhoto(x) => x.validate().await?,
+            Driver::Pan115Open(x) => x.validate().await?,
+            Driver::Pan115Share(x) => x.validate().await?,
+            Driver::Pan123Open(x) => x.validate().await?,
+            Driver::Pan123Link(x) => x.validate()?,
+            Driver::Aliyundrive(x) => x.validate().await?,
+            Driver::AliyundriveShare(x) => x.validate().await?,
+            Driver::QuarkOpen(x) => x.validate().await?,
+            Driver::QuarkTv(x) => x.validate().await?,
+            Driver::UcTv(x) => x.validate().await?,
         }
         Ok(d)
     }
@@ -449,6 +585,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.list(parent_fid).await,
             Driver::Dropbox(d) => d.list(parent_fid).await,
             Driver::GooglePhoto(d) => d.list(parent_fid).await,
+            Driver::Pan115Open(d) => d.list(parent_fid).await,
+            Driver::Pan115Share(d) => d.list(parent_fid).await,
+            Driver::Pan123Open(d) => d.list(parent_fid).await,
+            Driver::Pan123Link(d) => d.list(parent_fid).await,
+            Driver::Aliyundrive(d) => d.list(parent_fid).await,
+            Driver::AliyundriveShare(d) => d.list(parent_fid).await,
+            Driver::QuarkOpen(d) => d.list(parent_fid).await,
+            Driver::QuarkTv(d) => d.list(parent_fid).await,
+            Driver::UcTv(d) => d.list(parent_fid).await,
         }
     }
 
@@ -479,6 +624,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.download(e).await,
             Driver::Dropbox(d) => d.download(e).await,
             Driver::GooglePhoto(d) => d.download(e).await,
+            Driver::Pan115Open(d) => d.download(e).await,
+            Driver::Pan115Share(d) => d.download(e).await,
+            Driver::Pan123Open(d) => d.download(e).await,
+            Driver::Pan123Link(d) => d.download(e).await,
+            Driver::Aliyundrive(d) => d.download(e).await,
+            Driver::AliyundriveShare(d) => d.download(e).await,
+            Driver::QuarkOpen(d) => d.download(e).await,
+            Driver::QuarkTv(d) => d.download(e).await,
+            Driver::UcTv(d) => d.download(e).await,
         }
     }
 
@@ -510,6 +664,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.mkdir(parent_fid, name).await,
             Driver::Dropbox(d) => d.mkdir(parent_fid, name).await,
             Driver::GooglePhoto(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan115Open(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan115Share(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan123Open(d) => d.mkdir(parent_fid, name).await,
+            Driver::Pan123Link(d) => d.mkdir(parent_fid, name).await,
+            Driver::Aliyundrive(d) => d.mkdir(parent_fid, name).await,
+            Driver::AliyundriveShare(d) => d.mkdir(parent_fid, name).await,
+            Driver::QuarkOpen(d) => d.mkdir(parent_fid, name).await,
+            Driver::QuarkTv(d) => d.mkdir(parent_fid, name).await,
+            Driver::UcTv(d) => d.mkdir(parent_fid, name).await,
         }
     }
 
@@ -541,6 +704,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.rename(parent_fid, e, new_name).await,
             Driver::Dropbox(d) => d.rename(parent_fid, e, new_name).await,
             Driver::GooglePhoto(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan115Open(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan115Share(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan123Open(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Pan123Link(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::Aliyundrive(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::AliyundriveShare(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::QuarkOpen(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::QuarkTv(d) => d.rename(parent_fid, e, new_name).await,
+            Driver::UcTv(d) => d.rename(parent_fid, e, new_name).await,
         }
     }
 
@@ -577,6 +749,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
             Driver::Dropbox(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
             Driver::GooglePhoto(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115Open(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115Share(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Open(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Link(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::Aliyundrive(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::AliyundriveShare(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::QuarkOpen(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::QuarkTv(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
+            Driver::UcTv(d) => d.move_entry(parent_fid, e, dst_dir_fid).await,
         }
     }
 
@@ -613,6 +794,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.copy(parent_fid, e, dst_dir_fid).await,
             Driver::Dropbox(d) => d.copy(parent_fid, e, dst_dir_fid).await,
             Driver::GooglePhoto(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115Open(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan115Share(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Open(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Pan123Link(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::Aliyundrive(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::AliyundriveShare(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::QuarkOpen(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::QuarkTv(d) => d.copy(parent_fid, e, dst_dir_fid).await,
+            Driver::UcTv(d) => d.copy(parent_fid, e, dst_dir_fid).await,
         }
     }
 
@@ -644,6 +834,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.remove(parent_fid, e).await,
             Driver::Dropbox(d) => d.remove(parent_fid, e).await,
             Driver::GooglePhoto(d) => d.remove(parent_fid, e).await,
+            Driver::Pan115Open(d) => d.remove(parent_fid, e).await,
+            Driver::Pan115Share(d) => d.remove(parent_fid, e).await,
+            Driver::Pan123Open(d) => d.remove(parent_fid, e).await,
+            Driver::Pan123Link(d) => d.remove(parent_fid, e).await,
+            Driver::Aliyundrive(d) => d.remove(parent_fid, e).await,
+            Driver::AliyundriveShare(d) => d.remove(parent_fid, e).await,
+            Driver::QuarkOpen(d) => d.remove(parent_fid, e).await,
+            Driver::QuarkTv(d) => d.remove(parent_fid, e).await,
+            Driver::UcTv(d) => d.remove(parent_fid, e).await,
         }
     }
 
@@ -676,6 +875,15 @@ impl Driver {
             Driver::OnedriveShare(d) => d.put(dst_dir_fid, input).await,
             Driver::Dropbox(d) => d.put(dst_dir_fid, input).await,
             Driver::GooglePhoto(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan115Open(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan115Share(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan123Open(d) => d.put(dst_dir_fid, input).await,
+            Driver::Pan123Link(d) => d.put(dst_dir_fid, input).await,
+            Driver::Aliyundrive(d) => d.put(dst_dir_fid, input).await,
+            Driver::AliyundriveShare(d) => d.put(dst_dir_fid, input).await,
+            Driver::QuarkOpen(d) => d.put(dst_dir_fid, input).await,
+            Driver::QuarkTv(d) => d.put(dst_dir_fid, input).await,
+            Driver::UcTv(d) => d.put(dst_dir_fid, input).await,
         }
     }
 }
