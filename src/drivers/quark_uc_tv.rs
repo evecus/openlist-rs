@@ -18,6 +18,7 @@ pub struct TvConf {
     pub client_id: &'static str,
     pub sign_key: &'static str,
     pub app_ver: &'static str,
+    #[allow(dead_code)]
     pub channel: &'static str,
 }
 

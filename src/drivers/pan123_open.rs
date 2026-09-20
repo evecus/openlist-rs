@@ -29,6 +29,7 @@ pub struct Pan123Open {
 }
 
 impl Pan123Open {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         account_id: &str,
         client_id: String,

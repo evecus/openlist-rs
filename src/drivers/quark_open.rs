@@ -31,6 +31,7 @@ pub struct QuarkOpen {
 }
 
 impl QuarkOpen {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         account_id: &str,
         refresh_token: String,
