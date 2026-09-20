@@ -135,6 +135,122 @@
             <p class="hint-text">获取方式：浏览器登录 115.com → F12 → 网络 → 刷新 → 复制 Request Headers 中的完整 Cookie（须含 UID/CID/SEID）。</p>
           </template>
 
+          <template v-else-if="form.driver === 'pan115_open'">
+            <div class="field">
+              <label>AccessToken</label>
+              <textarea class="input" v-model="form.access_token" placeholder="115 开放平台 access_token"></textarea>
+            </div>
+            <div class="field">
+              <label>RefreshToken</label>
+              <textarea class="input" v-model="form.refresh_token" placeholder="115 开放平台 refresh_token"></textarea>
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'pan115_share'">
+            <div class="field">
+              <label>分享码 share_code</label>
+              <input class="input" v-model="form.share_code" placeholder="115 分享链接中的 share_code" />
+            </div>
+            <div class="field">
+              <label>提取码 receive_code</label>
+              <input class="input" v-model="form.receive_code" placeholder="分享提取码" />
+            </div>
+            <div class="field">
+              <label>Cookie（可选）</label>
+              <textarea class="input" v-model="form.cookie" placeholder="可选，含 UID/CID/SEID"></textarea>
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'pan123_open'">
+            <div class="field">
+              <label>ClientID（开发者凭证，可选）</label>
+              <input class="input" v-model="form.client_id" />
+            </div>
+            <div class="field">
+              <label>ClientSecret（可选）</label>
+              <input class="input" v-model="form.client_secret" />
+            </div>
+            <div class="field">
+              <label>RefreshToken（在线刷新）</label>
+              <textarea class="input" v-model="form.refresh_token"></textarea>
+            </div>
+            <div class="field">
+              <label>AccessToken（可选）</label>
+              <textarea class="input" v-model="form.access_token"></textarea>
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'pan123_link'">
+            <div class="field">
+              <label>直链树 origin_urls</label>
+              <textarea class="input" v-model="form.origin_urls" placeholder="Folder:\n  https://vip.123pan.com/..." rows="8"></textarea>
+            </div>
+            <div class="field">
+              <label>PrivateKey（可选，URL 鉴权）</label>
+              <input class="input" v-model="form.private_key" />
+            </div>
+            <div class="field">
+              <label>UID</label>
+              <input class="input" type="number" v-model.number="form.uid" />
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'aliyundrive'">
+            <div class="field">
+              <label>RefreshToken</label>
+              <textarea class="input" v-model="form.refresh_token" placeholder="旧版阿里云盘 refresh_token（建议改用开放平台）"></textarea>
+            </div>
+            <p class="hint-text">旧版驱动已废弃，若失败请改用「阿里云盘」开放平台驱动。</p>
+          </template>
+
+          <template v-else-if="form.driver === 'aliyundrive_share'">
+            <div class="field">
+              <label>RefreshToken（任意阿里账号）</label>
+              <textarea class="input" v-model="form.refresh_token"></textarea>
+            </div>
+            <div class="field">
+              <label>ShareId</label>
+              <input class="input" v-model="form.share_id" placeholder="分享链接中的 share_id" />
+            </div>
+            <div class="field">
+              <label>分享密码（可选）</label>
+              <input class="input" v-model="form.share_pwd" />
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'quark_open'">
+            <div class="field">
+              <label>RefreshToken</label>
+              <textarea class="input" v-model="form.refresh_token"></textarea>
+            </div>
+            <div class="field">
+              <label>AppID</label>
+              <input class="input" v-model="form.app_id" />
+            </div>
+            <div class="field">
+              <label>SignKey</label>
+              <input class="input" v-model="form.sign_key" />
+            </div>
+          </template>
+
+          <template v-else-if="form.driver === 'quark_tv' || form.driver === 'uc_tv'">
+            <div class="field">
+              <label>RefreshToken</label>
+              <textarea class="input" v-model="form.refresh_token" placeholder="TV 端扫码授权后的 refresh_token"></textarea>
+            </div>
+            <div class="field">
+              <label>DeviceID（可选）</label>
+              <input class="input" v-model="form.device_id" />
+            </div>
+            <div class="field">
+              <label>视频链接方式</label>
+              <select class="input" v-model="form.link_method">
+                <option value="download">download（原画）</option>
+                <option value="streaming">streaming（转码）</option>
+              </select>
+            </div>
+          </template>
+
           <template v-else-if="form.driver === 'thunder'">
             <div class="field">
               <label>账号（手机号或邮箱）</label>
@@ -568,7 +684,16 @@ const DRIVERS = [
   { value: 'pikpak', label: 'PikPak' },
   { value: 'onedrive_share', label: 'OneDrive 分享' },
   { value: 'dropbox', label: 'Dropbox' },
-  { value: 'google_photo', label: 'Google Photos' }
+  { value: 'google_photo', label: 'Google Photos' },
+  { value: 'pan115_open', label: '115 Open' },
+  { value: 'pan115_share', label: '115 分享' },
+  { value: 'pan123_open', label: '123 Open' },
+  { value: 'pan123_link', label: '123PanLink' },
+  { value: 'aliyundrive', label: '阿里云盘(旧)' },
+  { value: 'aliyundrive_share', label: '阿里云盘分享' },
+  { value: 'quark_open', label: '夸克 Open' },
+  { value: 'quark_tv', label: '夸克 TV' },
+  { value: 'uc_tv', label: 'UC TV' }
 ]
 
 // 当前正在编辑的账号 id，null 表示新增模式
@@ -622,6 +747,16 @@ const form = reactive({
   client_secret: '',
   use_online_api: true,
   device_id: '',
+  share_code: '',
+  receive_code: '',
+  share_id: '',
+  origin_urls: '',
+  uid: 0,
+  valid_duration: 30,
+  app_id: '',
+  sign_key: '',
+  api_address: '',
+  link_method: 'download',
   server_proxy: false
 })
 
