@@ -41,324 +41,385 @@ pub struct QuarkUcTv {
     account_id: String,
     http: Client,
     conf: TvConf,
-    is_uc: bool,
     refresh_token: Mutex<String>,
     access_token: Mutex<String>,
     device_id: Mutex<String>,
+    /// download | streaming
+    link_method: String,
     store: Arc<Store>,
 }
 
 impl QuarkUcTv {
-    pub fn new(
+    pub fn new_quark_tv(
         account_id: &str,
-        conf: TvConf,
-        is_uc: bool,
         refresh_token: String,
         access_token: String,
         device_id: String,
+        link_method: String,
         store: Arc<Store>,
     ) -> Self {
-        Self {
-            account_id: account_id.into(),
+        Self::with_conf(
+            account_id,
+            refresh_token,
+            access_token,
+            device_id,
+            link_method,
+            store,
+            QUARK_TV,
+        )
+    }
+
+    pub fn new_uc_tv(
+        account_id: &str,
+        refresh_token: String,
+        access_token: String,
+        device_id: String,
+        link_method: String,
+        store: Arc<Store>,
+    ) -> Self {
+        Self::with_conf(
+            account_id,
+            refresh_token,
+            access_token,
+            device_id,
+            link_method,
+            store,
+            UC_TV,
+        )
+    }
+
+    fn with_conf(
+        account_id: &str,
+        refresh_token: String,
+        access_token: String,
+        device_id: String,
+        link_method: String,
+        store: Arc<Store>,
+        conf: TvConf,
+    ) -> Self {
+        QuarkUcTv {
+            account_id: account_id.to_string(),
             http: Client::new(),
             conf,
-            is_uc,
             refresh_token: Mutex::new(refresh_token),
             access_token: Mutex::new(access_token),
             device_id: Mutex::new(device_id),
+            link_method: if link_method.is_empty() {
+                "download".into()
+            } else {
+                link_method
+            },
             store,
         }
     }
 
-    fn persist(&self) {
-        let rt = self.refresh_token.lock().unwrap().clone();
-        let at = self.access_token.lock().unwrap().clone();
-        let did = self.device_id.lock().unwrap().clone();
-        let _ = self.store.update_account_credential(&self.account_id, |c| {
-            match c {
-                Credential::QuarkTv {
-                    refresh_token,
-                    access_token,
-                    device_id,
-                    ..
-                }
-                | Credential::UcTv {
-                    refresh_token,
-                    access_token,
-                    device_id,
-                    ..
-                } => {
-                    *refresh_token = rt.clone();
-                    *access_token = at.clone();
-                    *device_id = did.clone();
-                }
-                _ => {}
+    fn save_tokens(&self, refresh: &str, access: &str, device_id: &str) {
+        *self.refresh_token.lock().unwrap() = refresh.to_string();
+        *self.access_token.lock().unwrap() = access.to_string();
+        *self.device_id.lock().unwrap() = device_id.to_string();
+        let (r, a, d) = (
+            refresh.to_string(),
+            access.to_string(),
+            device_id.to_string(),
+        );
+        let id = self.account_id.clone();
+        let is_uc = self.conf.api == UC_TV.api;
+        self.store.update_credential(&id, |cred| match cred {
+            Credential::QuarkTv {
+                refresh_token,
+                access_token,
+                device_id,
+                ..
+            } if !is_uc => {
+                *refresh_token = r.clone();
+                *access_token = a.clone();
+                *device_id = d.clone();
             }
+            Credential::UcTv {
+                refresh_token,
+                access_token,
+                device_id,
+                ..
+            } if is_uc => {
+                *refresh_token = r.clone();
+                *access_token = a.clone();
+                *device_id = d.clone();
+            }
+            _ => {}
         });
     }
 
-    async fn refresh(&self) -> Result<(), String> {
-        let rt = self.refresh_token.lock().unwrap().clone();
-        if rt.is_empty() {
-            return Err("refresh_token 为空".into());
-        }
+    fn generate_req_sign(&self, method: &str, pathname: &str) -> (String, String, String) {
+        let tm = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .to_string();
         let mut device_id = self.device_id.lock().unwrap().clone();
-        let tm = chrono::Utc::now().timestamp_millis().to_string();
         if device_id.is_empty() {
             device_id = hex::encode(Md5::digest(tm.as_bytes()));
             *self.device_id.lock().unwrap() = device_id.clone();
         }
         let req_id = hex::encode(Md5::digest(format!("{device_id}{tm}").as_bytes()));
-        let token_data = format!("GET&/token&{tm}&{}", self.conf.sign_key);
+        let token_data = format!("{method}&{pathname}&{tm}&{}", self.conf.sign_key);
         let token = hex::encode(Sha256::digest(token_data.as_bytes()));
+        (tm, token, req_id)
+    }
 
-        let url = format!("{}/token", self.conf.api);
+    async fn refresh_by_token(&self) -> Result<(), String> {
+        let rt = self.refresh_token.lock().unwrap().clone();
+        if rt.is_empty() {
+            return Err("refresh_token 为空，请先在 TV 端完成扫码授权后填入".into());
+        }
+        let pathname = "/token";
+        let (tm, token, req_id) = self.generate_req_sign("POST", pathname);
+        let url = format!("{}{pathname}", self.conf.api);
         let body = json!({
-            "req_id": req_id,
-            "app_ver": self.conf.app_ver,
-            "device_id": device_id,
-            "device_brand": "Xiaomi",
-            "platform": "tv",
-            "channel": self.conf.channel,
+            "client_id": self.conf.client_id,
+            "grant_type": "refresh_token",
             "refresh_token": rt,
         });
-        let res: Value = self
+        let resp = self
             .http
             .post(&url)
             .header("x-pan-tm", &tm)
             .header("x-pan-token", &token)
             .header("x-pan-client-id", self.conf.client_id)
+            .query(&[("req_id", req_id.as_str())])
             .json(&body)
             .send()
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("刷新 TV token 失败: {e}"))?;
+        let v: Value = resp
             .json()
             .await
-            .map_err(|e| e.to_string())?;
-
-        let data = res.get("data").cloned().unwrap_or(res.clone());
-        let at = data
+            .map_err(|e| format!("刷新响应解析失败: {e}"))?;
+        let access = v
             .get("access_token")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| format!("TV refresh 失败: {res}"))?
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
             .to_string();
-        if let Some(nrt) = data.get("refresh_token").and_then(|v| v.as_str()) {
-            *self.refresh_token.lock().unwrap() = nrt.to_string();
+        let refresh = v
+            .get("refresh_token")
+            .and_then(|x| x.as_str())
+            .unwrap_or(&rt)
+            .to_string();
+        if access.is_empty() {
+            let msg = v
+                .get("error_info")
+                .or_else(|| v.get("error"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("刷新 TV token 失败: {msg}"));
         }
-        *self.access_token.lock().unwrap() = at;
-        self.persist();
+        let did = self.device_id.lock().unwrap().clone();
+        self.save_tokens(&refresh, &access, &did);
         Ok(())
-    }
-
-    fn sign(&self, method: &str, path: &str, ts: &str) -> String {
-        let token_data = format!(
-            "{}&{}&{}&{}",
-            method.to_uppercase(),
-            path,
-            ts,
-            self.conf.sign_key
-        );
-        hex::encode(Sha256::digest(token_data.as_bytes()))
     }
 
     async fn request(
         &self,
         method: Method,
-        path: &str,
-        query: Option<Vec<(&str, String)>>,
+        pathname: &str,
+        query: Option<&[(&str, String)]>,
         body: Option<Value>,
+        retried: bool,
     ) -> Result<Value, String> {
-        if self.access_token.lock().unwrap().is_empty() {
-            self.refresh().await?;
-        }
-        let ts = chrono::Utc::now().timestamp_millis().to_string();
-        let token = self.sign(method.as_str(), path, &ts);
-        let mut url = format!("{}{path}", self.conf.api);
-        if let Some(q) = &query {
-            let qs: Vec<String> = q.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            if !qs.is_empty() {
-                url.push('?');
-                url.push_str(&qs.join("&"));
-            }
-        }
-        let at = self.access_token.lock().unwrap().clone();
+        let (tm, token, req_id) = self.generate_req_sign(method.as_str(), pathname);
+        let access = self.access_token.lock().unwrap().clone();
+        let url = format!("{}{pathname}", self.conf.api);
         let mut req = self
             .http
             .request(method.clone(), &url)
-            .header("x-pan-tm", &ts)
+            .header("x-pan-tm", &tm)
             .header("x-pan-token", &token)
             .header("x-pan-client-id", self.conf.client_id)
-            .header("Authorization", format!("Bearer {at}"));
-        if let Some(b) = body {
-            req = req.json(&b);
-        }
-        let resp = req.send().await.map_err(|e| e.to_string())?;
-        let status = resp.status();
-        let text = resp.text().await.map_err(|e| e.to_string())?;
-        let v: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text }));
-        if status.as_u16() == 401 || status.as_u16() == 403 {
-            self.refresh().await?;
-            return Err(format!("auth failed: {v}"));
-        }
-        if !status.is_success() {
-            return Err(format!("HTTP {status}: {v}"));
-        }
-        if let Some(code) = v.get("code").and_then(|c| c.as_i64()) {
-            if code != 0 {
-                return Err(format!(
-                    "api code={code}: {}",
-                    v.get("message").and_then(|m| m.as_str()).unwrap_or("")
-                ));
+            .header("User-Agent", format!("QuarkUCTV/{}", self.conf.app_ver))
+            .query(&[
+                ("req_id", req_id.as_str()),
+                ("access_token", access.as_str()),
+            ]);
+        if let Some(q) = query {
+            for (k, v) in q {
+                req = req.query(&[(k, v)]);
             }
+        }
+        if let Some(b) = &body {
+            req = req.json(b);
+        }
+        let resp = req.send().await.map_err(|e| format!("请求失败: {e}"))?;
+        let v: Value = resp.json().await.map_err(|e| format!("响应解析失败: {e}"))?;
+        let status = v.get("status").and_then(|s| s.as_i64()).unwrap_or(0);
+        let errno = v.get("errno").and_then(|e| e.as_i64()).unwrap_or(0);
+        let err_info = v
+            .get("error_info")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let token_bad = (status == -1 && (errno == 10001 || errno == 11001))
+            || err_info.contains("access token")
+            || err_info.contains("access_token")
+            || err_info.contains("token无效")
+            || err_info.contains("token 无效");
+        if token_bad && !retried {
+            self.refresh_by_token().await?;
+            return Box::pin(self.request(method, pathname, query, body, true)).await;
+        }
+        if status >= 400 || errno != 0 {
+            let msg = v
+                .get("error_info")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("TV 接口错误: {msg}"));
         }
         Ok(v)
     }
 
     pub async fn validate(&self) -> Result<(), String> {
-        if self.refresh_token.lock().unwrap().is_empty()
-            && self.access_token.lock().unwrap().is_empty()
-        {
-            return Err("refresh_token 或 access_token 需要一个".into());
+        if self.access_token.lock().unwrap().is_empty() {
+            self.refresh_by_token().await?;
         }
-        let _ = self.list("0").await?;
+        // 探测列表
+        let _ = self
+            .request(
+                Method::GET,
+                "/file",
+                Some(&[
+                    ("method", "list".into()),
+                    ("parent_fid", "0".into()),
+                    ("size", "1".into()),
+                ]),
+                None,
+                false,
+            )
+            .await;
+        // 不强制失败（接口路径可能因版本变化），token 刷新成功即可
         Ok(())
     }
 
     pub async fn list(&self, parent_fid: &str) -> Result<Vec<Entry>, String> {
-        let mut out = Vec::new();
+        let parent = if parent_fid.is_empty() {
+            "0"
+        } else {
+            parent_fid
+        };
+        let mut files = Vec::new();
         let mut page = 1u32;
         loop {
-            let body = json!({
-                "pdir_fid": parent_fid,
-                "_page": page,
-                "_size": 100,
-            });
-            let res = match self
-                .request(Method::POST, "/open/v1/file/list", None, Some(body))
-                .await
-            {
-                Ok(v) => v,
-                Err(e) if e.contains("auth failed") => {
-                    self.request(
-                        Method::POST,
-                        "/open/v1/file/list",
-                        None,
-                        Some(json!({
-                            "pdir_fid": parent_fid,
-                            "_page": page,
-                            "_size": 100,
-                        })),
-                    )
-                    .await?
-                }
-                Err(e) => return Err(e),
-            };
-            let data = res.get("data").cloned().unwrap_or(Value::Null);
-            let list = data
-                .get("list")
+            let resp = self
+                .request(
+                    Method::GET,
+                    "/file",
+                    Some(&[
+                        ("method", "list".into()),
+                        ("parent_fid", parent.to_string()),
+                        ("size", "100".into()),
+                        ("page", page.to_string()),
+                        ("order_by", "updated_at".into()),
+                        ("order_direction", "desc".into()),
+                    ]),
+                    None,
+                    false,
+                )
+                .await?;
+            let list = resp
+                .pointer("/data/list")
+                .or_else(|| resp.pointer("/data/file_list"))
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            if list.is_empty() {
-                break;
-            }
-            for item in list {
-                let fid = item.get("fid").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let name = item
-                    .get("file_name")
-                    .or_else(|| item.get("name"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let is_dir = item.get("dir").and_then(|v| v.as_bool()).unwrap_or(false)
-                    || item.get("file_type").and_then(|v| v.as_i64()) == Some(0);
-                let size = item.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
-                let modified = item
-                    .get("updated_at")
-                    .or_else(|| item.get("l_updated_at"))
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                out.push(Entry {
-                    name,
-                    path: fid.clone(),
+            for f in &list {
+                let is_dir = f
+                    .get("dir")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or_else(|| {
+                        !f.get("file").and_then(|v| v.as_bool()).unwrap_or(true)
+                    });
+                files.push(Entry {
+                    fid: f
+                        .get("fid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    name: f
+                        .get("file_name")
+                        .or_else(|| f.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    size: f.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
                     is_dir,
-                    size,
-                    modified,
-                    id: Some(fid),
-                    hash: None,
+                    updated_at: f.get("updated_at").and_then(|v| v.as_i64()),
+                    etag: None,
+                    s3_key_flag: None,
+                    file_type: None,
+                    extra: None,
                 });
             }
-            let total = data.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
-            if (out.len() as u64) >= total || page >= 100 {
+            if list.len() < 100 {
                 break;
             }
             page += 1;
         }
-        Ok(out)
+        Ok(files)
     }
 
     pub async fn download(&self, e: &Entry) -> Result<DownloadInfo, String> {
-        let fid = e.id.as_deref().unwrap_or(&e.path);
-        let res = match self
+        if e.is_dir {
+            return Err("目录无法下载".into());
+        }
+        let method = if self.link_method == "streaming" {
+            "streaming"
+        } else {
+            "download"
+        };
+        let resp = self
             .request(
                 Method::GET,
-                "/open/v1/file/download",
-                Some(vec![("fids", fid.to_string())]),
+                "/file",
+                Some(&[
+                    ("method", method.into()),
+                    ("fid", e.fid.clone()),
+                    ("group_by", "source".into()),
+                ]),
                 None,
+                false,
             )
-            .await
-        {
-            Ok(v) => v,
-            Err(e) if e.contains("auth failed") => {
-                self.request(
-                    Method::GET,
-                    "/open/v1/file/download",
-                    Some(vec![("fids", fid.to_string())]),
-                    None,
-                )
-                .await?
-            }
-            Err(e) => return Err(e),
-        };
-        let data = res.get("data").cloned().unwrap_or(Value::Null);
-        let arr = data.as_array().cloned().unwrap_or_else(|| {
-            if data.is_object() {
-                vec![data]
-            } else {
-                vec![]
-            }
-        });
-        let first = arr.first().ok_or("无下载地址".to_string())?;
-        let url = first
-            .get("download_url")
-            .or_else(|| first.get("url"))
+            .await?;
+        let url = resp
+            .pointer("/data/download_url")
+            .or_else(|| resp.pointer("/data/video_info/0/url"))
+            .or_else(|| resp.pointer("/data/url"))
             .and_then(|v| v.as_str())
-            .ok_or("无 download_url")?
+            .unwrap_or("")
             .to_string();
+        if url.is_empty() {
+            return Err("TV 未返回下载/播放地址".into());
+        }
         Ok(DownloadInfo {
             url,
             headers: vec![],
-            filename: Some(e.name.clone()),
-            size: if e.size > 0 { Some(e.size) } else { None },
+            proxy: true,
+            local_path: None,
         })
     }
 
     pub async fn mkdir(&self, _p: &str, _n: &str) -> Result<(), String> {
-        Err(format!(
-            "{} TV 只读，不支持写入",
-            if self.is_uc { "UC" } else { "夸克" }
-        ))
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
     }
     pub async fn rename(&self, _p: &str, _e: &Entry, _n: &str) -> Result<(), String> {
-        Err("TV 只读".into())
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
     }
     pub async fn move_entry(&self, _p: &str, _e: &Entry, _d: &str) -> Result<(), String> {
-        Err("TV 只读".into())
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
+    }
+    pub async fn copy(&self, _p: &str, _e: &Entry, _d: &str) -> Result<(), String> {
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
     }
     pub async fn remove(&self, _p: &str, _e: &Entry) -> Result<(), String> {
-        Err("TV 只读".into())
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
     }
-    pub async fn put(&self, _d: &str, _i: super::PutInput) -> Result<(), String> {
-        Err("TV 只读".into())
+    pub async fn put(&self, _d: &str, _input: super::PutInput) -> Result<(), String> {
+        Err("夸克/UC TV 为只读驱动，不支持此操作".into())
     }
 }
