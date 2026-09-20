@@ -196,7 +196,16 @@ const DRIVER_LABELS = {
   s3: 'S3',
   sftp: 'SFTP',
   ftp: 'FTP',
-  smb: 'SMB'
+  smb: 'SMB',
+  pan115_open: '115 Open',
+  pan115_share: '115 分享',
+  pan123_open: '123 Open',
+  pan123_link: '123Link',
+  aliyundrive: '阿里(旧)',
+  aliyundrive_share: '阿里分享',
+  quark_open: '夸克 Open',
+  quark_tv: '夸克 TV',
+  uc_tv: 'UC TV'
 }
 
 // 鉴权
@@ -390,6 +399,40 @@ async function addAccount(form) {
       payload.refresh_token = form.refresh_token
       payload.client_id = form.client_id || undefined
       payload.client_secret = form.client_secret || undefined
+    } else if (d === 'pan115_open') {
+      payload.access_token = form.access_token || undefined
+      payload.refresh_token = form.refresh_token || undefined
+    } else if (d === 'pan115_share') {
+      payload.share_code = form.share_code
+      payload.receive_code = form.receive_code || undefined
+      payload.cookie = form.cookie || undefined
+    } else if (d === 'pan123_open') {
+      payload.client_id = form.client_id || undefined
+      payload.client_secret = form.client_secret || undefined
+      payload.refresh_token = form.refresh_token || undefined
+      payload.access_token = form.access_token || undefined
+      payload.use_online_api = form.use_online_api
+      payload.api_address = form.api_address || undefined
+    } else if (d === 'pan123_link') {
+      payload.origin_urls = form.origin_urls
+      payload.private_key = form.private_key || undefined
+      payload.uid = form.uid || undefined
+    } else if (d === 'aliyundrive') {
+      payload.refresh_token = form.refresh_token
+    } else if (d === 'aliyundrive_share') {
+      payload.refresh_token = form.refresh_token
+      payload.share_id = form.share_id
+      payload.share_pwd = form.share_pwd || undefined
+    } else if (d === 'quark_open') {
+      payload.refresh_token = form.refresh_token
+      payload.app_id = form.app_id
+      payload.sign_key = form.sign_key
+      payload.use_online_api = form.use_online_api
+      payload.api_address = form.api_address || undefined
+    } else if (d === 'quark_tv' || d === 'uc_tv') {
+      payload.refresh_token = form.refresh_token || undefined
+      payload.device_id = form.device_id || undefined
+      payload.link_method = form.link_method || undefined
     }
 
     await api('/api/accounts', {
@@ -510,6 +553,40 @@ async function editAccount(form) {
       payload.refresh_token = form.refresh_token
       payload.client_id = form.client_id || undefined
       payload.client_secret = form.client_secret || undefined
+    } else if (d === 'pan115_open') {
+      payload.access_token = form.access_token || undefined
+      payload.refresh_token = form.refresh_token || undefined
+    } else if (d === 'pan115_share') {
+      payload.share_code = form.share_code
+      payload.receive_code = form.receive_code || undefined
+      payload.cookie = form.cookie || undefined
+    } else if (d === 'pan123_open') {
+      payload.client_id = form.client_id || undefined
+      payload.client_secret = form.client_secret || undefined
+      payload.refresh_token = form.refresh_token || undefined
+      payload.access_token = form.access_token || undefined
+      payload.use_online_api = form.use_online_api
+      payload.api_address = form.api_address || undefined
+    } else if (d === 'pan123_link') {
+      payload.origin_urls = form.origin_urls
+      payload.private_key = form.private_key || undefined
+      payload.uid = form.uid || undefined
+    } else if (d === 'aliyundrive') {
+      payload.refresh_token = form.refresh_token
+    } else if (d === 'aliyundrive_share') {
+      payload.refresh_token = form.refresh_token
+      payload.share_id = form.share_id
+      payload.share_pwd = form.share_pwd || undefined
+    } else if (d === 'quark_open') {
+      payload.refresh_token = form.refresh_token
+      payload.app_id = form.app_id
+      payload.sign_key = form.sign_key
+      payload.use_online_api = form.use_online_api
+      payload.api_address = form.api_address || undefined
+    } else if (d === 'quark_tv' || d === 'uc_tv') {
+      payload.refresh_token = form.refresh_token || undefined
+      payload.device_id = form.device_id || undefined
+      payload.link_method = form.link_method || undefined
     }
 
     await api(`/api/accounts/${form.id}`, {
@@ -652,7 +729,8 @@ function closePreview() {
 const canWrite = computed(() => {
   if (!currentId.value) return false
   const acc = accounts.value.find((a) => a.id === currentId.value)
-  return !!acc && acc.driver !== '123pan_share'
+  const READ_ONLY_DRIVERS = ['123pan_share', 'pan115_share', 'aliyundrive_share', 'pan123_link']
+  return !!acc && !READ_ONLY_DRIVERS.includes(acc.driver)
 })
 
 // 当前目录的虚拟路径：第一段为账号名（crumbs[0].name 即账号名）
