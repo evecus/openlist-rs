@@ -614,8 +614,7 @@ impl Ilanzou {
         let days = now_secs.div_euclid(86400);
         let (y, m, d) = civil_from_days(days);
         let key = format!("disk/{:04}/{:02}/{:02}/{account}/{now_ms}.rar", y, m, d);
-        let token;
-        if (buf.len() as u64) <= PART_SIZE {
+        let token = if (buf.len() as u64) <= PART_SIZE {
             let part =
                 reqwest::multipart::Part::bytes(buf).file_name(input.name.clone());
             let form = reqwest::multipart::Form::new()
@@ -631,7 +630,7 @@ impl Ilanzou {
                 .await
                 .map_err(|e| format!("蓝奏云上传失败: {e}"))?;
             let v: Value = resp.json().await.unwrap_or(json!({}));
-            token = v.get("token").map(value_to_string).unwrap_or_default();
+            v.get("token").map(value_to_string).unwrap_or_default()
         } else {
             // 七牛分片上传
             let key_b64 = URL_SAFE.encode(key.as_bytes());
@@ -686,7 +685,7 @@ impl Ilanzou {
                 .await
                 .map_err(|e| format!("蓝奏云分片合并失败: {e}"))?;
             let v: Value = resp.json().await.unwrap_or(json!({}));
-            token = v.get("token").map(value_to_string).unwrap_or_default();
+            v.get("token").map(value_to_string).unwrap_or_default()
         }
         if token.is_empty() {
             return Err("蓝奏云上传失败（未返回结果 token）".into());
