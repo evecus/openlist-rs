@@ -686,7 +686,7 @@ impl Ilanzou {
                 .map_err(|e| format!("蓝奏云分片合并失败: {e}"))?;
             let v: Value = resp.json().await.unwrap_or(json!({}));
             v.get("token").map(value_to_string).unwrap_or_default()
-        }
+        };
         if token.is_empty() {
             return Err("蓝奏云上传失败（未返回结果 token）".into());
         }
