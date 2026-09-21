@@ -158,7 +158,7 @@ impl Ilanzou {
         let cipher = Aes128::new(GenericArray::from_slice(key));
         let pad = 16 - (plain.len() % 16);
         let mut buf = plain.to_vec();
-        buf.extend(std::iter::repeat(pad as u8).take(pad));
+        buf.extend(std::iter::repeat_n(pad as u8, pad));
         for chunk in buf.chunks_mut(16) {
             cipher.encrypt_block(GenericArray::from_mut_slice(chunk));
         }
@@ -420,9 +420,7 @@ impl Ilanzou {
             .and_then(|l| l.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let real_url = if (300..400).contains(&status) && !location.is_empty() {
-            location
-        } else if status == 200 && !location.is_empty() {
+        let real_url = if ((300..400).contains(&status) || status == 200) && !location.is_empty() {
             location
         } else if status == 200 {
             let v: Value = resp.json().await.unwrap_or(json!({}));
@@ -654,7 +652,7 @@ impl Ilanzou {
                 return Err("蓝奏云分片上传初始化失败（无 uploadId）".into());
             }
             let total = buf.len() as u64;
-            let part_num = ((total + PART_SIZE - 1) / PART_SIZE) as u32;
+            let part_num = total.div_ceil(PART_SIZE) as u32;
             let mut parts: Vec<Value> = Vec::with_capacity(part_num as usize);
             for i in 1..=part_num {
                 let start = (i as u64 - 1) * PART_SIZE;

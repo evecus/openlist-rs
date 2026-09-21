@@ -121,12 +121,14 @@ impl Terabox {
         if self.js_token.lock().unwrap().is_empty() {
             self.reset_js_token().await?;
         }
+        // MutexGuard 临时值不能活过 .await（future 必须 Send），先取出 clone
+        let js_token = self.js_token.lock().unwrap().clone();
         let resp = send(
             method.clone(),
             query.clone(),
             form.clone(),
             body.clone(),
-            self.js_token.lock().unwrap().clone(),
+            js_token,
         )
         .send()
         .await
@@ -147,16 +149,11 @@ impl Terabox {
         }
         if errno == 4000023 || errno == 450016 {
             self.reset_js_token().await?;
-            let resp = send(
-                method,
-                query,
-                form,
-                body,
-                self.js_token.lock().unwrap().clone(),
-            )
-            .send()
-            .await
-            .map_err(|e| format!("Terabox 请求失败: {e}"))?;
+            let js_token = self.js_token.lock().unwrap().clone();
+            let resp = send(method, query, form, body, js_token)
+                .send()
+                .await
+                .map_err(|e| format!("Terabox 请求失败: {e}"))?;
             let text = resp.text().await.unwrap_or_default();
             return serde_json::from_str(&text).map_err(|e| format!("Terabox 响应解析失败: {e}"));
         }
@@ -287,7 +284,7 @@ impl Terabox {
         let mut u = 0u32;
         for q in 0..256 {
             u = (u + p[q] + a[q]) % 256;
-            p.swap(q as usize, u as usize);
+            p.swap(q, u as usize);
         }
         let mut o: Vec<u8> = Vec::with_capacity(s2.len());
         let (mut i, mut u2) = (0u32, 0u32);
@@ -587,7 +584,7 @@ impl Terabox {
         } else {
             INITIAL_CHUNK_SIZE
         };
-        let count = ((stream_size + chunk_size - 1) / chunk_size) as usize;
+        let count = stream_size.div_ceil(chunk_size) as usize;
         let mut upload_block_list: Vec<String> = Vec::with_capacity(count);
         for partseq in 0..count {
             let start = partseq as u64 * chunk_size;
