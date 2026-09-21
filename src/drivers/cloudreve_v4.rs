@@ -327,7 +327,7 @@ impl CloudreveV4 {
         if self.can_login() {
             return self.login().await;
         }
-        if !self.refresh_token.is_empty() {
+        if !self.refresh_token.lock().unwrap().is_empty() {
             return self.refresh_token().await;
         }
         let access = self.access_token.lock().unwrap().clone();

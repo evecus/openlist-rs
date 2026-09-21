@@ -9,10 +9,11 @@
 
 use super::{DownloadInfo, PutInput};
 use crate::config::{Entry, Store};
-use aes::cipher::{BlockEncrypt, GenericArray, KeyInit};
+use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
 use aes::Aes128;
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
+use md5::{Digest, Md5};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -108,7 +109,6 @@ impl Ilanzou {
                 "/login",
                 reqwest::Method::POST,
                 None,
-                None,
                 Some(json!({"loginName": self.username, "loginPwd": self.password})),
             )
             .await?;
@@ -142,7 +142,7 @@ impl Ilanzou {
             }
             *self.uuid.lock().unwrap() = uuid;
         }
-        let v = self.proved("/user/account/map", reqwest::Method::GET, None, None, None).await?;
+        let v = self.proved("/user/account/map", reqwest::Method::GET, None, None).await?;
         let user_id = v.pointer("/map/userId").map(value_to_string).unwrap_or_default();
         let account = v.pointer("/map/account").map(value_to_string).unwrap_or_default();
         if user_id.is_empty() {
@@ -234,8 +234,8 @@ impl Ilanzou {
                 && (code == -1 || code == -2 || self.token.lock().unwrap().is_empty())
             {
                 self.login().await?;
-                return self
-                    .request_inner(pathname, proved, method, query_extra, body, true)
+                // Box::pin 打断异步递归（重登后重试一次）
+                return Box::pin(self.request_inner(pathname, proved, method, query_extra, body, true))
                     .await;
             }
             return Err(format!(
@@ -253,14 +253,16 @@ impl Ilanzou {
         query_extra: Option<String>,
         body: Option<Value>,
     ) -> Result<Value, String> {
-        self.request_inner(
+        // request_inner → login → unproved/proved → request_inner 存在异步递归，
+        // 在此引入 Box::pin 打断无限大小 future（E0733）
+        Box::pin(self.request_inner(
             &format!("/{}{pathname}", self.conf.unproved),
             false,
             method,
             query_extra,
             body,
             false,
-        )
+        ))
         .await
     }
 
@@ -271,14 +273,15 @@ impl Ilanzou {
         query_extra: Option<String>,
         body: Option<Value>,
     ) -> Result<Value, String> {
-        self.request_inner(
+        // 同 unproved：Box::pin 打断异步递归（E0733）
+        Box::pin(self.request_inner(
             &format!("/{}{pathname}", self.conf.proved),
             true,
             method,
             query_extra,
             body,
             false,
-        )
+        ))
         .await
     }
 
@@ -571,7 +574,7 @@ impl Ilanzou {
             }
         }
         // md5 etag
-        let mut h = md5::Md5::new();
+        let mut h = Md5::new();
         h.update(&buf);
         let etag = hex::encode(h.finalize());
         let file_size_kib = ((buf.len() as i64) + 1023) / 1024;
@@ -664,7 +667,7 @@ impl Ilanzou {
                     .http
                     .put(&part_url)
                     .header("Authorization", format!("UpToken {up_token}"))
-                    .body(buf[start..end].to_vec())
+                    .body(buf[start as usize..end].to_vec())
                     .send()
                     .await
                     .map_err(|e| format!("蓝奏云分片上传失败: {e}"))?;
