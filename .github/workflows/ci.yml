@@ -31,31 +31,6 @@ jobs:
           path: web/dist
           retention-days: 1
 
-  # Job 1:类型检查
-  check:
-    name: cargo check
-    needs: frontend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download web/dist
-        uses: actions/download-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci
-
-      - name: cargo check
-        run: cargo check --locked --all-targets
-
-  # Job 2:Clippy 静态检查(警告即失败)
   clippy:
     name: cargo clippy
     needs: frontend

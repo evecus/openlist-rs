@@ -419,10 +419,12 @@ impl QuarkUcTv {
         if url.is_empty() {
             return Err("TV 未返回下载/播放地址".into());
         }
+        // TV 直链为带签名的临时 URL、无任何鉴权头（headers 为空），
+        // 外部播放器可直接访问，无需服务器中转。与夸克网盘（需 Cookie/Referer/UA）不同。
         Ok(DownloadInfo {
             url,
             headers: vec![],
-            proxy: true,
+            proxy: false,
             local_path: None,
         })
     }
