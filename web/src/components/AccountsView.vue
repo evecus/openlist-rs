@@ -1021,10 +1021,19 @@ function resetTvScan() {
 onBeforeUnmount(resetTvScan)
 
 /** 把 qr_data 文本编码成二维码 SVG data URL */
-function renderQr(text) {
+// 夸克 TV /oauth/authorize 返回的 qr_data 本身就是 PNG 图片的 base64，
+// 直接作为 img src 显示即可；仅当它退化成纯文本链接时才用本地库编码。
+function renderQr(data) {
+  if (!data) return ''
+  const s = String(data).trim()
+  // 已经是图片：data URI 或 PNG/JPEG base64
+  if (s.startsWith('data:image/')) return s
+  if (s.startsWith('iVBOR')) return 'data:image/png;base64,' + s   // PNG
+  if (s.startsWith('/9j/')) return 'data:image/jpeg;base64,' + s   // JPEG
+  // 纯文本（二维码内容）→ 本地编码
   try {
     const qr = qrcode(0, 'M')
-    qr.addData(text)
+    qr.addData(s)
     qr.make()
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(qr.createSvgTag({ scalable: true }))
   } catch (e) {
