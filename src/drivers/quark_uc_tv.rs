@@ -50,6 +50,8 @@ const BUILD_DEVICE: &str = "M2004J7AC";
 const BUILD_PRODUCT: &str = "M2004J7AC";
 const DEVICE_GPU: &str = "Adreno (TM) 550";
 const ACTIVITY_RECT: &str = "{}";
+/// 官方 TV App 完整 UA（Go 版 UserAgent，含 M2004J7AC 与 device_* 自洽）
+const TV_UA: &str = "Mozilla/5.0 (Linux; U; Android 13; zh-cn; M2004J7AC Build/UKQ1.231108.001) AppleWebKit/533.1 (KHTML, like Gecko) Mobile Safari/533.1";
 
 /// 依据 driver 名取对应配置
 pub fn conf_for(driver: &str) -> Option<TvConf> {
@@ -194,21 +196,31 @@ impl QuarkUcTv {
         if rt.is_empty() {
             return Err("refresh_token 为空，请先在 TV 端完成扫码授权后填入".into());
         }
+        // 对齐 Go 版 getRefreshTokenByTV(isRefresh=true)：
+        // 走第三方中转 codeApi + /token，body 带全套设备参数 + refresh_token。
         let pathname = "/token";
-        let (tm, token, req_id) = self.generate_req_sign("POST", pathname);
-        let url = format!("{}{pathname}", self.conf.api);
+        let (_, _, req_id) = self.generate_req_sign("POST", pathname);
+        let url = format!("{}{pathname}", self.conf.code_api);
+        let did = self.device_id.lock().unwrap().clone();
         let body = json!({
-            "client_id": self.conf.client_id,
-            "grant_type": "refresh_token",
+            "req_id": req_id,
+            "app_ver": self.conf.app_ver,
+            "device_id": did.clone(),
+            "device_brand": DEVICE_BRAND,
+            "platform": PLATFORM,
+            "device_name": DEVICE_NAME,
+            "device_model": DEVICE_MODEL,
+            "build_device": BUILD_DEVICE,
+            "build_product": BUILD_PRODUCT,
+            "device_gpu": DEVICE_GPU,
+            "activity_rect": ACTIVITY_RECT,
+            "channel": self.conf.channel,
             "refresh_token": rt,
         });
         let resp = self
             .http
             .post(&url)
-            .header("x-pan-tm", &tm)
-            .header("x-pan-token", &token)
-            .header("x-pan-client-id", self.conf.client_id)
-            .query(&[("req_id", req_id.as_str())])
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
             .await
@@ -217,25 +229,18 @@ impl QuarkUcTv {
             .json()
             .await
             .map_err(|e| format!("刷新响应解析失败: {e}"))?;
-        let access = v
-            .get("access_token")
-            .and_then(|x| x.as_str())
-            .unwrap_or("")
-            .to_string();
-        let refresh = v
-            .get("refresh_token")
-            .and_then(|x| x.as_str())
-            .unwrap_or(&rt)
-            .to_string();
-        if access.is_empty() {
-            let msg = v
-                .get("error_info")
-                .or_else(|| v.get("error"))
-                .and_then(|x| x.as_str())
-                .unwrap_or("unknown");
-            return Err(format!("刷新 TV token 失败: {msg}"));
+        // Go 版 RefreshTokenAuthResp: { code, message, data: { access_token, refresh_token } }
+        let code = v.get("code").and_then(|x| x.as_i64()).unwrap_or(0);
+        if code != 200 {
+            let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("unknown");
+            return Err(format!("刷新 TV token 失败(code={code}): {msg}"));
         }
-        let did = self.device_id.lock().unwrap().clone();
+        let data = v.get("data").ok_or("刷新响应缺少 data")?;
+        let access = data.get("access_token").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let refresh = data.get("refresh_token").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        if refresh.is_empty() || access.is_empty() {
+            return Err("刷新返回的 refresh_token/access_token 为空".into());
+        }
         self.save_tokens(&refresh, &access, &did);
         Ok(())
     }
@@ -250,18 +255,33 @@ impl QuarkUcTv {
     ) -> Result<Value, String> {
         let (tm, token, req_id) = self.generate_req_sign(method.as_str(), pathname);
         let access = self.access_token.lock().unwrap().clone();
+        let did = self.device_id.lock().unwrap().clone();
         let url = format!("{}{pathname}", self.conf.api);
+        // 对齐 Go 版 request()：带全套 TV 设备指纹（防风控，与扫码阶段保持一致）
+        let base_query: Vec<(String, String)> = vec![
+            ("req_id".into(), req_id.clone()),
+            ("access_token".into(), access),
+            ("app_ver".into(), self.conf.app_ver.into()),
+            ("device_id".into(), did),
+            ("device_brand".into(), DEVICE_BRAND.into()),
+            ("platform".into(), PLATFORM.into()),
+            ("device_name".into(), DEVICE_NAME.into()),
+            ("device_model".into(), DEVICE_MODEL.into()),
+            ("build_device".into(), BUILD_DEVICE.into()),
+            ("build_product".into(), BUILD_PRODUCT.into()),
+            ("device_gpu".into(), DEVICE_GPU.into()),
+            ("activity_rect".into(), ACTIVITY_RECT.into()),
+            ("channel".into(), self.conf.channel.into()),
+        ];
         let mut req = self
             .http
             .request(method.clone(), &url)
+            .header("Accept", "application/json, text/plain, */*")
             .header("x-pan-tm", &tm)
             .header("x-pan-token", &token)
             .header("x-pan-client-id", self.conf.client_id)
-            .header("User-Agent", format!("QuarkUCTV/{}", self.conf.app_ver))
-            .query(&[
-                ("req_id", req_id.as_str()),
-                ("access_token", access.as_str()),
-            ]);
+            .header("User-Agent", TV_UA)
+            .query(&base_query);
         if let Some(q) = query {
             for (k, v) in q {
                 req = req.query(&[(k, v)]);
@@ -543,7 +563,7 @@ impl TvLogin {
             .http
             .request(method, &url)
             .header("Accept", "application/json, text/plain, */*")
-            .header("User-Agent", format!("QuarkUCTV/{}", self.conf.app_ver))
+            .header("User-Agent", TV_UA)
             .header("x-pan-tm", &tm)
             .header("x-pan-token", &token)
             .header("x-pan-client-id", self.conf.client_id)
