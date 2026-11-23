@@ -330,7 +330,14 @@ impl QuarkUcTv {
                 Some(&[
                     ("method", "list".into()),
                     ("parent_fid", "0".into()),
-                    ("size", "1".into()),
+                    ("order_by", "3".into()),
+                    ("desc", "1".into()),
+                    ("category", String::new()),
+                    ("source", String::new()),
+                    ("ex_source", String::new()),
+                    ("list_all", "0".into()),
+                    ("page_size", "1".into()),
+                    ("page_index", "0".into()),
                 ]),
                 None,
                 false,
@@ -341,13 +348,12 @@ impl QuarkUcTv {
     }
 
     pub async fn list(&self, parent_fid: &str) -> Result<Vec<Entry>, String> {
-        let parent = if parent_fid.is_empty() {
-            "0"
-        } else {
-            parent_fid
-        };
+        // 对齐 Go 版 List()：夸克 TV 的 /file?method=list 用 page_size/page_index(从0)，
+        // 排序参数 order_by 用数字(3=更新时间)、desc=1，返回字段为 data.files/data.total_count。
+        let parent = if parent_fid.is_empty() { "0" } else { parent_fid };
         let mut files = Vec::new();
-        let mut page = 1u32;
+        let mut page_index = 0u32;
+        let page_size = 100u32;
         loop {
             let resp = self
                 .request(
@@ -356,40 +362,30 @@ impl QuarkUcTv {
                     Some(&[
                         ("method", "list".into()),
                         ("parent_fid", parent.to_string()),
-                        ("size", "100".into()),
-                        ("page", page.to_string()),
-                        ("order_by", "updated_at".into()),
-                        ("order_direction", "desc".into()),
+                        ("order_by", "3".into()),
+                        ("desc", "1".into()),
+                        ("category", String::new()),
+                        ("source", String::new()),
+                        ("ex_source", String::new()),
+                        ("list_all", "0".into()),
+                        ("page_size", page_size.to_string()),
+                        ("page_index", page_index.to_string()),
                     ]),
                     None,
                     false,
                 )
                 .await?;
             let list = resp
-                .pointer("/data/list")
-                .or_else(|| resp.pointer("/data/file_list"))
+                .pointer("/data/files")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
             for f in &list {
-                let is_dir = f
-                    .get("dir")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or_else(|| {
-                        !f.get("file").and_then(|v| v.as_bool()).unwrap_or(true)
-                    });
+                // isdir: 1=目录；字段名为 filename（非 file_name）
+                let is_dir = f.get("isdir").and_then(|v| v.as_i64()).unwrap_or(0) == 1;
                 files.push(Entry {
-                    fid: f
-                        .get("fid")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    name: f
-                        .get("file_name")
-                        .or_else(|| f.get("name"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                    fid: f.get("fid").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    name: f.get("filename").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                     size: f.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
                     is_dir,
                     updated_at: f.get("updated_at").and_then(|v| v.as_i64()),
@@ -399,10 +395,11 @@ impl QuarkUcTv {
                     extra: None,
                 });
             }
-            if list.len() < 100 {
+            let total = resp.pointer("/data/total_count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if (page_index + 1) * page_size >= total || list.is_empty() {
                 break;
             }
-            page += 1;
+            page_index += 1;
         }
         Ok(files)
     }
